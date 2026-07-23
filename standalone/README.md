@@ -18,12 +18,42 @@ NVIDIA Audio Effects SDK 1.6.1.2, MSVC 2022, VST3 SDK 3.8.0. The Steinberg
 - `resource/voicefx.uidesc` — a small flat-gray VSTGUI editor (see **UI** below).
 - `CMakeLists.txt` — fetches nothing; points at a local VST3 SDK checkout.
 
+## Effects (Mode)
+- **Noise** — denoiser.
+- **Reverb** — dereverb (removes room reverberation).
+- **Both** — denoiser + dereverb.
+- **Echo Cancel** — Acoustic Echo Cancellation (AEC). See **Echo Cancel (AEC)** below.
+
+**Super Resolution** (checkbox) rebuilds high-frequency detail on top of the
+Noise / Reverb / Both modes. It is ignored for Echo Cancel.
+
+> Studio Voice and Speaker Focus were removed. They require the NVIDIA AFX **2.x**
+> models, which are not available for Windows (the 1.6.1.2 redistributable ships
+> no such models), so on this machine they never worked.
+
+## Echo Cancel (AEC)
+AEC removes the far-end / loudspeaker sound (the "echo") from the microphone. It
+needs a **reference** signal — a copy of what is being played back — alongside the
+mic. This build feeds that reference through the **right input channel**:
+
+- **Left input channel = microphone**
+- **Right input channel = reference** (the far-end / system playback / the sound
+  coming out of your speakers)
+
+The plugin runs AEC on that pair and outputs the single cleaned voice on **both**
+output channels. So in your host, route the mic to the left and the playback you
+want cancelled to the right of the same stereo input, then pick **Echo Cancel**.
+(The other modes ignore the right channel and just clean each channel on its own.)
+
+Internally AEC uses one NVIDIA effect handle that takes two input channels and
+produces one; the classic modes use one handle per channel. Everything runs at
+48 kHz internally and is resampled to/from the host rate (e.g. 44.1 kHz) as usual.
+
 ## UI
-The plugin ships a simple gray editor built with VSTGUI, described entirely in
-`resource/voicefx.uidesc` (no bitmaps — every control draws itself):
-- **Mode** — dropdown (Noise / Echo / Both / Studio Voice / Speaker Focus).
-- **Intensity** — horizontal slider, 0–100 %, with a numeric read-out.
-- **Super Resolution** — on/off checkbox.
+The plugin ships a compact gray editor built with VSTGUI, described entirely in
+`resource/voicefx.uidesc` (no bitmaps — every control draws itself): a **Mode**
+dropdown, a **Level** (intensity) slider with a numeric read-out, and a
+**Super Res** checkbox.
 
 VST3Editor binds each control to its parameter by matching the `control-tag`
 values in the `.uidesc` to the plugin's FOURCC parameter IDs, so there is no
@@ -76,8 +106,9 @@ user folder `%LOCALAPPDATA%\Programs\Common\VST3\` or the system
 
 ## Notes / limitations
 - Runs on the default GPU (no multi-GPU selection).
-- Ships a simple flat-gray VSTGUI editor (Mode / Intensity / Super Resolution);
-  see **UI** above.
-- Studio Voice / Speaker Focus modes need the NVIDIA AFX **2.x** models, which are
-  not part of SDK 1.6.1.2; selecting them will fail to create the effect until a
-  2.x runtime + models are installed.
+- Ships a compact flat-gray VSTGUI editor (Mode / Level / Super Res); see **UI** above.
+- **Echo Cancel (AEC)** expects the reference signal on the right input channel
+  (left = mic); see **Echo Cancel (AEC)** above. With a mono input there is no
+  reference channel, so AEC produces silence.
+- The **Level** slider and **Super Res** apply to the Noise / Reverb / Both modes;
+  AEC has no intensity control and ignores both.

@@ -26,6 +26,7 @@
 
 #include "warning-disable.hpp"
 #include <base/source/fstreamer.h>
+#include <cstring>
 #include <filesystem>
 #include <pluginterfaces/vst/ivstparameterchanges.h>
 #include "warning-enable.hpp"
@@ -277,12 +278,21 @@ tresult PLUGIN_API vst3::effect::processor::process(ProcessData& data)
 						switch (param->getParameterId()) {
 						case PARAMETER_MODE:
 							if (param->getPoint(points - 1, sample_offset, value) == kResultTrue) {
-								// Normalized -> discrete index across the five modes.
-								uint32_t mode = static_cast<uint32_t>(std::llroundf(std::floor(std::min(4., value * 5.))));
-								_fx->enable_denoise(mode == 0 || mode == 2);
-								_fx->enable_dereverb(mode == 1 || mode == 2);
-								_fx->enable_studio_voice(mode == 3);
-								_fx->enable_speaker_focus(mode == 4);
+								// Normalized -> discrete index across the four modes:
+								// 0=Noise, 1=Reverb, 2=Both, 3=Echo Cancel (AEC).
+								uint32_t mode = static_cast<uint32_t>(std::lround(value * 3.0));
+								if (mode > 3) {
+									mode = 3;
+								}
+								bool aec = (mode == 3);
+								_fx->enable_aec(aec);
+								_fx->enable_denoise(!aec && (mode == 0 || mode == 2));
+								_fx->enable_dereverb(!aec && (mode == 1 || mode == 2));
+								if (aec) {
+									// AEC is a stand-alone effect; it can't chain with
+									// Super Resolution.
+									_fx->enable_superres(false);
+								}
 								// A mode switch can change the effect's sample rate, so
 								// rebuild the pipeline to be safe.
 								need_reset = true;
@@ -290,7 +300,8 @@ tresult PLUGIN_API vst3::effect::processor::process(ProcessData& data)
 							break;
 						case PARAMETER_SUPERRES:
 							if (param->getPoint(points - 1, sample_offset, value) == kResultTrue) {
-								_fx->enable_superres(value >= 0.5);
+								// Ignored while AEC is active (mutually exclusive).
+								_fx->enable_superres(value >= 0.5 && !_fx->aec_enabled());
 								// Super Resolution changes the effect's input sample rate.
 								need_reset = true;
 							}
@@ -430,10 +441,7 @@ tresult PLUGIN_API vst3::effect::processor::setState(IBStream* state)
 			_fx->enable_superres(value);
 		}
 		if (bool value = 0; streamer.readBool(value) == true) {
-			_fx->enable_studio_voice(value);
-		}
-		if (bool value = 0; streamer.readBool(value) == true) {
-			_fx->enable_speaker_focus(value);
+			_fx->enable_aec(value);
 		}
 		// Force the pipeline to rebuild on the next start so the restored mode's
 		// sample rate is picked up.
@@ -463,8 +471,7 @@ tresult PLUGIN_API vst3::effect::processor::getState(IBStream* state)
 		// Fields appended after the original format. Kept at the end so that older
 		// hosts/presets that expect only the first three keep working.
 		streamer.writeBool(_fx->superres_enabled());
-		streamer.writeBool(_fx->studio_voice_enabled());
-		streamer.writeBool(_fx->speaker_focus_enabled());
+		streamer.writeBool(_fx->aec_enabled());
 #endif
 
 		return kResultOk;
@@ -641,6 +648,19 @@ void vst3::effect::processor::step_process(buffer_container_t& ins, buffer_conta
 		size_t out_blocksize = _fx->output_blocksize();
 		size_t blocks        = ins[0]->used() / in_blocksize;
 		size_t samples       = blocks * in_blocksize;
+
+#ifndef TONPLUGINS_DEMO
+		// AEC reads two input channels (mic + reference). If the host runs us with a
+		// single channel there is no reference to work with, so drain the input and
+		// emit nothing rather than read past the input array.
+		if (_fx->aec_enabled() && _channels < 2) {
+			for (size_t idx = 0; idx < _channels; idx++) {
+				ins[idx]->read(ins[idx]->used(), nullptr);
+			}
+			return;
+		}
+#endif
+
 		if (samples > 0) {
 			size_t out_needed = blocks * out_blocksize;
 
@@ -654,6 +674,19 @@ void vst3::effect::processor::step_process(buffer_container_t& ins, buffer_conta
 			size_t in_samples  = samples;
 			size_t out_samples = 0;
 			_fx->process(inptrs.data(), in_samples, outptrs.data(), out_samples);
+
+#ifndef TONPLUGINS_DEMO
+			// AEC collapses (mic, reference) into a single cleaned channel written to
+			// outptrs[0]. Mirror it into the remaining output channels so the rest of
+			// the pipeline (resample/copy-out) sees a full, uniform set of channels.
+			if (_fx->aec_enabled() && out_samples > 0) {
+				for (size_t idx = 1; idx < _channels; idx++) {
+					if (outptrs[idx] && outptrs[0]) {
+						memcpy(outptrs[idx], outptrs[0], out_samples * sizeof(float));
+					}
+				}
+			}
+#endif
 
 			// Confirm reads/writes
 			for (size_t idx = 0; idx < _channels; idx++) {

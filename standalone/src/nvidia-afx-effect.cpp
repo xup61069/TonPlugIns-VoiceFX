@@ -28,28 +28,6 @@
 #include <nvAudioEffects.h>
 #include "warning-enable.hpp"
 
-// ---------------------------------------------------------------------------
-// Forward-compatible effect selectors for the NVIDIA AFX SDK 2.x.
-//
-// The nvAudioEffects.h header vendored in this repository (2022) predates the
-// Studio Voice and Speaker Focus effects, so their selector strings are not
-// defined there. We declare them here, guarded by #ifndef, so that:
-//   * this file keeps compiling against the currently bundled header, and
-//   * once you drop in NVIDIA's newer header (which defines these macros), the
-//     official values automatically win and these fall away.
-//
-// The string values were taken from NVIDIA's AFX 2.1.0 "Type Definitions"
-// reference. The matching model files ship with the 2.x redistributable; the
-// filenames below are best-effort and MUST be verified against the "models"
-// folder of the redistributable you install (search for the *.trtpkg files).
-// ---------------------------------------------------------------------------
-#ifndef NVAFX_EFFECT_STUDIO_VOICE_HIGH_QUALITY
-#define NVAFX_EFFECT_STUDIO_VOICE_HIGH_QUALITY "studio_voice_high_quality"
-#endif
-#ifndef NVAFX_EFFECT_SPEAKER_FOCUS
-#define NVAFX_EFFECT_SPEAKER_FOCUS "speaker_focus" // VERIFY against your SDK header.
-#endif
-
 nvidia::afx::effect::effect() : _lock(), _model_path(), _model_path_str()
 {
 	D_LOG_LOUD("");
@@ -61,8 +39,7 @@ nvidia::afx::effect::effect() : _lock(), _model_path(), _model_path_str()
 	enable_denoise(true);
 	enable_dereverb(false);
 	enable_superres(false);
-	enable_studio_voice(false);
-	enable_speaker_focus(false);
+	enable_aec(false);
 #endif
 
 #ifndef TONPLUGINS_DEMO
@@ -109,7 +86,8 @@ float nvidia::afx::effect::get(NvAFX_ParameterSelector key)
 template<>
 void nvidia::afx::effect::set(NvAFX_ParameterSelector key, uint32_t value)
 {
-	for (size_t ch = 0; ch < _fx_channels; ch++) {
+	// Loop over live handles (AEC uses a single handle even when _fx_channels > 1).
+	for (size_t ch = 0; ch < _fx.size(); ch++) {
 		if (auto res = _nvafx->SetU32(_fx[ch].get(), key, value); res != NVAFX_STATUS_SUCCESS) {
 			throw_log("%s(%s, %" PRIu32 ") failed: 0x%08" PRIX32 ".", __FUNCTION_SIG__, key, value, res);
 		}
@@ -125,7 +103,7 @@ void nvidia::afx::effect::set(NvAFX_ParameterSelector key, bool value)
 template<>
 void nvidia::afx::effect::set(NvAFX_ParameterSelector key, float value)
 {
-	for (size_t ch = 0; ch < _fx_channels; ch++) {
+	for (size_t ch = 0; ch < _fx.size(); ch++) {
 		if (auto res = _nvafx->SetFloat(_fx[ch].get(), key, value); res != NVAFX_STATUS_SUCCESS) {
 			throw_log("%s(%s, %f) failed: 0x%08" PRIX32 ".", __FUNCTION_SIG__, key, value, res);
 		}
@@ -135,7 +113,7 @@ void nvidia::afx::effect::set(NvAFX_ParameterSelector key, float value)
 template<>
 void nvidia::afx::effect::set(NvAFX_ParameterSelector key, const char* value)
 {
-	for (size_t ch = 0; ch < _fx_channels; ch++) {
+	for (size_t ch = 0; ch < _fx.size(); ch++) {
 		if (auto res = _nvafx->SetString(_fx[ch].get(), key, value); res != NVAFX_STATUS_SUCCESS) {
 			throw_log("%s(%s, '%s') failed: 0x%08" PRIX32 ".", __FUNCTION_SIG__, key, value, res);
 		}
@@ -166,7 +144,7 @@ void nvidia::afx::effect::set_model_paths(std::vector<std::string> const& paths)
 		ptrs.push_back(p.c_str());
 	}
 
-	for (size_t ch = 0; ch < _fx_channels; ch++) {
+	for (size_t ch = 0; ch < _fx.size(); ch++) {
 		if (auto res = _nvafx->SetStringList(_fx[ch].get(), NVAFX_PARAM_MODEL_PATH, ptrs.data(), static_cast<unsigned int>(ptrs.size())); res != NVAFX_STATUS_SUCCESS) {
 			throw_log("Setting %zu chained model paths failed: 0x%08" PRIX32 ".", ptrs.size(), res);
 		}
@@ -290,37 +268,20 @@ void nvidia::afx::effect::enable_superres(bool v)
 	}
 }
 
-bool nvidia::afx::effect::studio_voice_enabled()
+bool nvidia::afx::effect::aec_enabled()
 {
-	return _fx_studiovoice;
+	return _fx_aec;
 }
 
-void nvidia::afx::effect::enable_studio_voice(bool v)
+void nvidia::afx::effect::enable_aec(bool v)
 {
-	D_LOG_LOUD("Setting studio voice to %s.", v ? "enabled" : "disabled");
+	D_LOG_LOUD("Setting AEC to %s.", v ? "enabled" : "disabled");
 
 	auto lock = std::unique_lock<decltype(_lock)>(_lock);
-	if (v != _fx_studiovoice) {
-		_fx_studiovoice = v;
-		_fx_dirty       = true;
-		_fx_model       = true;
-	}
-}
-
-bool nvidia::afx::effect::speaker_focus_enabled()
-{
-	return _fx_speakerfocus;
-}
-
-void nvidia::afx::effect::enable_speaker_focus(bool v)
-{
-	D_LOG_LOUD("Setting speaker focus to %s.", v ? "enabled" : "disabled");
-
-	auto lock = std::unique_lock<decltype(_lock)>(_lock);
-	if (v != _fx_speakerfocus) {
-		_fx_speakerfocus = v;
-		_fx_dirty        = true;
-		_fx_model        = true;
+	if (v != _fx_aec) {
+		_fx_aec   = v;
+		_fx_dirty = true;
+		_fx_model = true;
 	}
 }
 
@@ -381,20 +342,18 @@ void nvidia::afx::effect::load()
 		//
 		// Classic modes (denoise / dereverb / both) run at 48kHz. Super Resolution
 		// cleans up at 16kHz and then rebuilds a 48kHz signal, so it is a "chained"
-		// effect with two model files. Studio Voice and Speaker Focus are stand-alone
-		// 48kHz effects from the NVIDIA AFX 2.x SDK.
+		// effect with two model files. AEC is a stand-alone 48kHz effect that takes
+		// two input channels (mic + reference) and produces one cleaned channel.
 		NvAFX_EffectSelector     effect   = NVAFX_EFFECT_DENOISER;
 		bool                     chained  = false;
 		uint32_t                 in_rate  = 48000;
 		uint32_t                 out_rate = 48000;
 		std::vector<std::string> effect_models{"denoiser_48k.trtpkg"};
 #ifndef TONPLUGINS_DEMO
-		if (_fx_studiovoice) {
-			effect        = NVAFX_EFFECT_STUDIO_VOICE_HIGH_QUALITY;
-			effect_models = {"studio_voice_48k.trtpkg"}; // VERIFY against your redistributable's models folder.
-		} else if (_fx_speakerfocus) {
-			effect        = NVAFX_EFFECT_SPEAKER_FOCUS;
-			effect_models = {"speaker_focus_48k.trtpkg"}; // VERIFY against your redistributable's models folder.
+		if (_fx_aec) {
+			// Acoustic Echo Cancellation. Single handle, 2-in (mic + reference) / 1-out.
+			effect        = NVAFX_EFFECT_AEC;
+			effect_models = {"aec_48k.trtpkg"};
 		} else if (_fx_superres) {
 			// Cleanup at 16kHz, then super-resolve up to 48kHz (chained effect).
 			chained = true;
@@ -436,10 +395,13 @@ void nvidia::afx::effect::load()
 			clear();
 		}
 
-		// Resize the array to fit the new number of channels.
-		_fx.resize(_fx_channels);
+		// One effect handle per channel for the classic per-channel effects, but a
+		// SINGLE handle for AEC (it consumes mic + reference together and emits one
+		// cleaned channel). Resize the array accordingly.
+		size_t handle_count = _fx_aec ? 1u : static_cast<size_t>(_fx_channels);
+		_fx.resize(handle_count);
 
-		for (size_t channel = 0; channel < _fx_channels; channel++) {
+		for (size_t channel = 0; channel < _fx.size(); channel++) {
 			auto& fx = _fx[channel];
 
 			// If there's already an effect here, we don't need to do anything.
@@ -500,7 +462,7 @@ void nvidia::afx::effect::load()
 		D_LOG("Sample rate is now %" PRIu32 " Hz in / %" PRIu32 " Hz out.", in_rate, out_rate);
 
 		// Initialize the effect
-		for (size_t channel = 0; channel < _fx_channels; channel++) {
+		for (size_t channel = 0; channel < _fx.size(); channel++) {
 			auto& fx = _fx[channel];
 			if (auto error = _nvafx->Load(fx.get()); error != NVAFX_STATUS_SUCCESS) {
 				throw_log("Failed to initialize effect. (Code %08" PRIX32 ").\0", error);
@@ -521,8 +483,11 @@ void nvidia::afx::effect::load()
 			cstk = ctx->enter();
 		}
 
-		set<float>(NVAFX_PARAM_INTENSITY_RATIO, _cfg_intensity);
-		set<bool>(NVAFX_PARAM_ENABLE_VAD, _cfg_vad);
+		// AEC exposes neither an intensity ratio nor VAD; setting them would fail.
+		if (!_fx_aec) {
+			set<float>(NVAFX_PARAM_INTENSITY_RATIO, _cfg_intensity);
+			set<bool>(NVAFX_PARAM_ENABLE_VAD, _cfg_vad);
+		}
 		_cfg_dirty = false;
 	}
 #endif
@@ -539,7 +504,7 @@ void nvidia::afx::effect::clear()
 	// directly, instead of flooding it with silence to "warm" it back to zero.
 	if (_nvafx->Reset) {
 		bool all_reset = true;
-		for (size_t ch = 0; ch < _fx_channels; ch++) {
+		for (size_t ch = 0; ch < _fx.size(); ch++) {
 			if (!_fx[ch]) {
 				continue;
 			}
@@ -607,12 +572,26 @@ void nvidia::afx::effect::process(float const** inputs, size_t& input_samples, f
 		size_t in_offset     = 0;
 		size_t out_offset    = 0;
 		while (samples_left >= in_blocksize) {
-			for (size_t ch = 0; ch < _fx_channels; ch++) {
-				const float* in  = inputs[ch] + in_offset;
-				float*       out = outputs[ch] + out_offset;
+#ifndef TONPLUGINS_DEMO
+			if (_fx_aec) {
+				// AEC: one handle, two input channels (0 = mic, 1 = reference) into a
+				// single cleaned output channel. The caller must provide at least two
+				// input buffers; only outputs[0] is written (the VST layer mirrors it).
+				const float* in[2]  = {inputs[0] + in_offset, inputs[1] + in_offset};
+				float*       out[1] = {outputs[0] + out_offset};
+				if (auto error = _nvafx->Run(_fx[0].get(), in, out, static_cast<unsigned>(in_blocksize), 2); error != NVAFX_STATUS_SUCCESS) {
+					throw_log("Failed to process AEC audio. (Code %08" PRIX32 ").\0", error);
+				}
+			} else
+#endif
+			{
+				for (size_t ch = 0; ch < _fx_channels; ch++) {
+					const float* in  = inputs[ch] + in_offset;
+					float*       out = outputs[ch] + out_offset;
 
-				if (auto error = _nvafx->Run(_fx[ch].get(), &in, &out, in_blocksize, 1); error != NVAFX_STATUS_SUCCESS) {
-					throw_log("Failed to process audio. (Code %08" PRIX32 ").\0", error);
+					if (auto error = _nvafx->Run(_fx[ch].get(), &in, &out, static_cast<unsigned>(in_blocksize), 1); error != NVAFX_STATUS_SUCCESS) {
+						throw_log("Failed to process audio. (Code %08" PRIX32 ").\0", error);
+					}
 				}
 			}
 

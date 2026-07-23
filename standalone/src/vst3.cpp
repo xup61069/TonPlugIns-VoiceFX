@@ -9,7 +9,7 @@
 #include <public.sdk/source/main/pluginfactory.h>
 #include "warning-enable.hpp"
 
-#define VOICEFX_VERSION_STR "2.0.0.0"
+#define VOICEFX_VERSION_STR "2.1.0.0"
 
 using namespace Steinberg;
 using namespace Steinberg::Vst;

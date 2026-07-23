@@ -38,15 +38,16 @@ vst3::effect::controller::controller()
 
 #ifndef TONPLUGINS_DEMO
 	{
-		// Keep the first three entries (Noise/Echo/Both) in their original order so
-		// that presets saved by older versions keep meaning the same thing. The two
-		// new entries need the NVIDIA AFX 2.x runtime and models.
+		// Noise = denoiser, Reverb = dereverb, Both = denoiser+dereverb.
+		// Echo Cancel = Acoustic Echo Cancellation (needs a reference signal on the
+		// right input channel; see the README). Studio Voice / Speaker Focus were
+		// removed: they require the NVIDIA AFX 2.x models, which aren't available on
+		// Windows, so they never worked here.
 		auto p = new Steinberg::Vst::StringListParameter(STR("Mode"), PARAMETER_MODE, STR("Removal"));
 		p->appendString(STR("Noise"));
-		p->appendString(STR("Echo"));
+		p->appendString(STR("Reverb"));
 		p->appendString(STR("Both"));
-		p->appendString(STR("Studio Voice"));
-		p->appendString(STR("Speaker Focus"));
+		p->appendString(STR("Echo Cancel"));
 		parameters.addParameter(p);
 	}
 	{
@@ -86,12 +87,14 @@ tresult PLUGIN_API vst3::effect::controller::setComponentState(IBStream* state)
 		return kResultFalse;
 	}
 
+	// Must match the byte layout written by the processor's getState():
+	// bool denoise, bool dereverb, float intensity, bool superres, bool aec.
 	Steinberg::IBStreamer streamer(state, kLittleEndian);
 #ifndef TONPLUGINS_DEMO
-	if (!streamer.readBool(_enable_echo_removal)) {
+	if (!streamer.readBool(_enable_denoise)) {
 		return kResultFalse;
 	}
-	if (!streamer.readBool(_enable_reverb_removal)) {
+	if (!streamer.readBool(_enable_dereverb)) {
 		return kResultFalse;
 	}
 	if (!streamer.readFloat(_intensity)) {
@@ -102,11 +105,8 @@ tresult PLUGIN_API vst3::effect::controller::setComponentState(IBStream* state)
 	if (!streamer.readBool(_enable_superres)) {
 		_enable_superres = false;
 	}
-	if (!streamer.readBool(_enable_studio_voice)) {
-		_enable_studio_voice = false;
-	}
-	if (!streamer.readBool(_enable_speaker_focus)) {
-		_enable_speaker_focus = false;
+	if (!streamer.readBool(_enable_aec)) {
+		_enable_aec = false;
 	}
 #endif
 

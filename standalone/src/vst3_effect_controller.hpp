@@ -44,12 +44,13 @@ namespace vst3::effect {
 	};
 
 	class controller : public EditControllerEx1, public ChannelContext::IInfoListener {
-		bool  _enable_echo_removal;
-		bool  _enable_reverb_removal;
+		// Mirror of the processor state (see setComponentState). Kept only so the
+		// controller can read the stream the processor writes.
+		bool  _enable_denoise;
+		bool  _enable_dereverb;
 		float _intensity;
 		bool  _enable_superres;
-		bool  _enable_studio_voice;
-		bool  _enable_speaker_focus;
+		bool  _enable_aec;
 
 		public:
 		controller();

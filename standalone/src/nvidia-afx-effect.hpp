@@ -52,9 +52,11 @@ namespace nvidia::afx {
 		std::atomic_bool _fx_model;
 		std::atomic_bool _fx_denoise;
 		std::atomic_bool _fx_dereverb;
-		std::atomic_bool _fx_superres;     // Super Resolution (adds high-frequency detail).
-		std::atomic_bool _fx_studiovoice;  // Studio Voice (repairs low-quality microphones). NVIDIA AFX 2.x.
-		std::atomic_bool _fx_speakerfocus; // Speaker Focus (keeps only the main speaker). NVIDIA AFX 2.x.
+		std::atomic_bool _fx_superres; // Super Resolution (adds high-frequency detail).
+		// Acoustic Echo Cancellation. Unlike the other effects it takes TWO input
+		// channels (0 = microphone, 1 = reference / far-end) and produces ONE cleaned
+		// channel, so it uses a single effect handle instead of one per channel.
+		std::atomic_bool _fx_aec;
 #endif
 
 #ifndef TONPLUGINS_DEMO
@@ -107,15 +109,11 @@ namespace nvidia::afx {
 		bool superres_enabled();
 		void enable_superres(bool v);
 
-		// Studio Voice: an all-in-one enhancement that recovers speech captured on
-		// low-end microphones. Requires the NVIDIA AFX 2.x runtime and model.
-		bool studio_voice_enabled();
-		void enable_studio_voice(bool v);
-
-		// Speaker Focus: keeps the prominent speaker and suppresses other voices.
-		// Requires the NVIDIA AFX 2.x runtime and model.
-		bool speaker_focus_enabled();
-		void enable_speaker_focus(bool v);
+		// Acoustic Echo Cancellation: cancels the far-end/loudspeaker signal from the
+		// microphone. Needs a reference channel (channel 1). Mutually exclusive with
+		// the other effects; when on, denoise/dereverb/superres are ignored.
+		bool aec_enabled();
+		void enable_aec(bool v);
 #endif
 
 #ifndef TONPLUGINS_DEMO
