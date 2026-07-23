@@ -171,6 +171,46 @@ static bool run_case(const char* title, const char* selector, bool chained,
 	return true;
 }
 
+// Probe how the AEC effect expects its input (mic + reference).
+static bool aec_probe(const char* model, uint32_t rate)
+{
+	std::printf("\n[AEC PROBE] model=%s rate=%u\n", model, rate);
+	NvAFX_Handle h = nullptr;
+	CHECK(CreateEffect(NVAFX_EFFECT_AEC, &h));
+
+	std::string mp = std::string(kModels) + "/" + model;
+	CHECK(SetString(h, NVAFX_PARAM_MODEL_PATH, mp.c_str()));
+	CHECK(SetU32(h, NVAFX_PARAM_USE_DEFAULT_GPU, 1));
+	NvAFX_Status sr = SetU32(h, NVAFX_PARAM_INPUT_SAMPLE_RATE, rate);
+	NvAFX_Status so = SetU32(h, NVAFX_PARAM_OUTPUT_SAMPLE_RATE, rate);
+	std::printf("    set in_sr -> %s, out_sr -> %s\n", status_str(sr), status_str(so));
+	CHECK(Load(h));
+
+	uint32_t in_ch  = getu32(h, NVAFX_PARAM_NUM_INPUT_CHANNELS);
+	uint32_t out_ch = getu32(h, NVAFX_PARAM_NUM_OUTPUT_CHANNELS);
+	uint32_t in_blk = getu32(h, NVAFX_PARAM_NUM_INPUT_SAMPLES_PER_FRAME);
+	uint32_t out_blk = getu32(h, NVAFX_PARAM_NUM_OUTPUT_SAMPLES_PER_FRAME);
+	uint32_t in_sr  = getu32(h, NVAFX_PARAM_INPUT_SAMPLE_RATE);
+	std::printf("    AEC reports: in_ch=%u out_ch=%u in_blk=%u out_blk=%u in_sr=%u\n",
+	            in_ch, out_ch, in_blk, out_blk, in_sr);
+
+	// Feed in_ch input buffers (mic on ch0, reference on ch1 if a second is expected).
+	uint32_t nch = in_ch ? in_ch : 1;
+	std::vector<std::vector<float>> ins(nch, std::vector<float>(in_blk, 0.f));
+	std::vector<float>              out(out_blk, 0.f);
+	for (uint32_t c = 0; c < nch; ++c)
+		for (uint32_t i = 0; i < in_blk; ++i)
+			ins[c][i] = 0.1f * std::sin(2.0f * 3.14159265f * (300.0f + 40.0f * c) * i / (float)(in_sr ? in_sr : rate));
+	std::vector<const float*> inptr;
+	for (auto& v : ins) inptr.push_back(v.data());
+	float* outp = out.data();
+	NvAFX_Status rs = Run(h, inptr.data(), &outp, in_blk, nch);
+	std::printf("    Run(num_input_channels=%u) -> %s\n", nch, status_str(rs));
+
+	DestroyEffect(h);
+	return rs == NVAFX_STATUS_SUCCESS;
+}
+
 static std::string wide_to_utf8(std::wstring const& w)
 {
 	if (w.empty()) return {};
@@ -243,6 +283,9 @@ int main(int argc, char** argv)
 	total++; if (run_case("Dereverb+Denoiser16k + SuperRes 16k->48k (chained)",
 	                      NVAFX_CHAINED_EFFECT_DEREVERB_DENOISER_16k_SUPERRES_16k_TO_48k, true,
 	                      {"dereverb_denoiser_16k.trtpkg", "superres_16kto48k.trtpkg"}, 16000, 48000)) passed++;
+
+	// AEC probe (informational): discover the mic+reference input layout.
+	aec_probe("aec_48k.trtpkg", 48000);
 
 	std::printf("\n=== RESULT: %d/%d tests passed ===\n", passed, total);
 	FreeLibrary(dll);

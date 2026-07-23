@@ -57,6 +57,21 @@ Run on **NVIDIA GeForce RTX 5080**, driver 610.74, **AFX SDK 1.6.1.2**:
   accepted (not immutable).
 - `NvAFX_Reset` succeeds (Tier A).
 
+### AEC (Acoustic Echo Cancellation) probe
+The test also probes the `aec` effect, which is the basis for a second-input
+feature. On SDK 1.6.1.2 it reports:
+
+```
+[AEC PROBE] model=aec_48k.trtpkg rate=48000
+    AEC reports: in_ch=2 out_ch=1 in_blk=480 out_blk=480 in_sr=48000
+    Run(num_input_channels=2) -> SUCCESS
+```
+
+So AEC takes **two input channels** (channel 0 = microphone, channel 1 =
+reference / far-end) and produces **one** cleaned output channel, at 48 kHz with a
+480-sample block. This is what a second "Reference" input bus on the plugin would
+feed.
+
 ### Not covered here
 - The VST3 glue (resampler, parameter handling, state) still needs the full
   TonPlugIns framework to build and test.
