@@ -47,6 +47,9 @@ namespace vst3::effect {
 		bool  _enable_echo_removal;
 		bool  _enable_reverb_removal;
 		float _intensity;
+		bool  _enable_superres;
+		bool  _enable_studio_voice;
+		bool  _enable_speaker_focus;
 
 		public:
 		controller();

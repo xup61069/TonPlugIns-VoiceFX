@@ -49,7 +49,10 @@ namespace vst3::effect {
 
 		size_t  _channels;
 		int64_t _samplerate;
-		bool    _resample;
+		// The effect's input and output sample rates can differ (Super Resolution
+		// takes 16kHz in and gives 48kHz out), so we track each side separately.
+		bool _resample_in;
+		bool _resample_out;
 
 		int64_t _delay;
 		int64_t _local_delay;

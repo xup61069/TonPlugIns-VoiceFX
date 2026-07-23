@@ -36,7 +36,7 @@
 #include "warning-enable.hpp"
 #endif
 
-vst3::effect::processor::processor() : _dirty(true), _channels(0), _samplerate(0), _resample(false), _delay(0), _local_delay(0), _in_lock(), _in_unresampled(), _in_resampler(), _in_resampled(), _fx(), _out_lock(), _out_unresampled(), _out_resampler(), _out_resampled(), _lock(), _worker(), _worker_cv(), _worker_quit(false), _worker_signal(false)
+vst3::effect::processor::processor() : _dirty(true), _channels(0), _samplerate(0), _resample_in(false), _resample_out(false), _delay(0), _local_delay(0), _in_lock(), _in_unresampled(), _in_resampler(), _in_resampled(), _fx(), _out_lock(), _out_unresampled(), _out_resampler(), _out_resampled(), _lock(), _worker(), _worker_cv(), _worker_quit(false), _worker_signal(false)
 {
 	D_LOG_LOUD("");
 	try {
@@ -250,8 +250,9 @@ tresult PLUGIN_API vst3::effect::processor::process(ProcessData& data)
 
 // If there were any parameter changes, handle them.
 #ifndef TONPLUGINS_DEMO
+		bool need_reset = false;
 		if (data.inputParameterChanges) {
-			for (Steinberg::int32 idx = 0, edx = (data.inputParameterChanges->getParameterCount() > 0); idx < edx; ++idx) {
+			for (Steinberg::int32 idx = 0, edx = data.inputParameterChanges->getParameterCount(); idx < edx; ++idx) {
 				auto param = data.inputParameterChanges->getParameterData(idx);
 				if (param) {
 					Steinberg::Vst::ParamValue value;
@@ -260,10 +261,22 @@ tresult PLUGIN_API vst3::effect::processor::process(ProcessData& data)
 						switch (param->getParameterId()) {
 						case PARAMETER_MODE:
 							if (param->getPoint(points - 1, sample_offset, value) == kResultTrue) {
-								// Normalized -> Discrete
-								uint32_t mode = std::llroundf(std::floor(std::min(2., value * 3.)));
-								_fx->enable_denoise(mode == 2 || mode == 0);
-								_fx->enable_dereverb(mode == 2 || mode == 1);
+								// Normalized -> discrete index across the five modes.
+								uint32_t mode = static_cast<uint32_t>(std::llroundf(std::floor(std::min(4., value * 5.))));
+								_fx->enable_denoise(mode == 0 || mode == 2);
+								_fx->enable_dereverb(mode == 1 || mode == 2);
+								_fx->enable_studio_voice(mode == 3);
+								_fx->enable_speaker_focus(mode == 4);
+								// A mode switch can change the effect's sample rate, so
+								// rebuild the pipeline to be safe.
+								need_reset = true;
+							}
+							break;
+						case PARAMETER_SUPERRES:
+							if (param->getPoint(points - 1, sample_offset, value) == kResultTrue) {
+								_fx->enable_superres(value >= 0.5);
+								// Super Resolution changes the effect's input sample rate.
+								need_reset = true;
 							}
 							break;
 						case PARAMETER_INTENSITY:
@@ -275,6 +288,11 @@ tresult PLUGIN_API vst3::effect::processor::process(ProcessData& data)
 					}
 				}
 			}
+		}
+		if (need_reset) {
+			// Rebuild resamplers/buffers for the effect's (possibly new) rates.
+			_dirty = true;
+			reset();
 		}
 #endif
 
@@ -313,7 +331,7 @@ tresult PLUGIN_API vst3::effect::processor::process(ProcessData& data)
 			decltype(_in_unresampled)* outs = &_out_resampled;
 
 			// Resample input if necessary.
-			if (_resample) {
+			if (_resample_in) {
 				ins  = &_in_unresampled;
 				outs = &_in_resampled;
 
@@ -323,9 +341,11 @@ tresult PLUGIN_API vst3::effect::processor::process(ProcessData& data)
 					D_LOG_LOUD("[%zu] %8zu %8zu %8zu %8zu %8ld %lld", idx, _in_unresampled[idx]->used(), _in_resampled.size() > 0 ? _in_resampled[idx]->used() : 0, _out_unresampled.size() > 0 ? _out_unresampled[idx]->used() : 0, _out_resampled[idx]->used(), data.numSamples, _local_delay);
 				}
 
-				// Swap things so the next step works.
+				// Send the processed audio to the output-resampler's input buffer,
+				// or straight to the host-rate buffer if no output resampling is
+				// needed (e.g. Super Resolution already outputs at the host rate).
 				ins  = outs;
-				outs = &_out_unresampled;
+				outs = _resample_out ? &_out_unresampled : &_out_resampled;
 			} else {
 				ins  = &_in_unresampled;
 				outs = &_out_resampled;
@@ -334,7 +354,7 @@ tresult PLUGIN_API vst3::effect::processor::process(ProcessData& data)
 			step_process(*ins, *outs);
 
 			// Resample output if necessary.
-			if (_resample) {
+			if (_resample_out) {
 				ins  = outs;
 				outs = &_out_resampled;
 
@@ -388,6 +408,20 @@ tresult PLUGIN_API vst3::effect::processor::setState(IBStream* state)
 		} else {
 			return kResultFalse;
 		}
+		// Fields appended after the original format. Presets saved by older
+		// versions stop here, so a failed read just means "use the default".
+		if (bool value = 0; streamer.readBool(value) == true) {
+			_fx->enable_superres(value);
+		}
+		if (bool value = 0; streamer.readBool(value) == true) {
+			_fx->enable_studio_voice(value);
+		}
+		if (bool value = 0; streamer.readBool(value) == true) {
+			_fx->enable_speaker_focus(value);
+		}
+		// Force the pipeline to rebuild on the next start so the restored mode's
+		// sample rate is picked up.
+		_dirty = true;
 #endif
 
 		return kResultOk;
@@ -410,6 +444,11 @@ tresult PLUGIN_API vst3::effect::processor::getState(IBStream* state)
 		streamer.writeBool(_fx->denoise_enabled());
 		streamer.writeBool(_fx->dereverb_enabled());
 		streamer.writeFloat(_fx->intensity());
+		// Fields appended after the original format. Kept at the end so that older
+		// hosts/presets that expect only the first three keep working.
+		streamer.writeBool(_fx->superres_enabled());
+		streamer.writeBool(_fx->studio_voice_enabled());
+		streamer.writeBool(_fx->speaker_focus_enabled());
 #endif
 
 		return kResultOk;
@@ -439,51 +478,69 @@ void vst3::effect::processor::reset()
 		_fx->channels(_channels);
 		_fx->load();
 
-		_resample = (_samplerate != _fx->input_samplerate());
+		// The effect may use different input and output sample rates (Super
+		// Resolution takes 16kHz in and gives 48kHz out), so decide each side
+		// independently. When they are equal (all classic modes at 48kHz), this
+		// behaves exactly like the previous single-flag logic.
+		uint32_t fx_in_rate  = _fx->input_samplerate();
+		uint32_t fx_out_rate = _fx->output_samplerate();
+		_resample_in         = (static_cast<uint32_t>(_samplerate) != fx_in_rate);
+		_resample_out        = (static_cast<uint32_t>(_samplerate) != fx_out_rate);
 
 		// Allocate Buffers
-		D_LOG_LOUD("Reallocating Buffers to fit %" PRIu64 " and %" PRIu32 " samples...", _samplerate, _fx->input_samplerate());
+		D_LOG_LOUD("Reallocating buffers for host %" PRIu64 " Hz, effect %" PRIu32 " Hz in / %" PRIu32 " Hz out...", _samplerate, fx_in_rate, fx_out_rate);
 		_in_unresampled.resize(_channels);
 		_in_unresampled.shrink_to_fit();
 		_out_resampled.resize(_channels);
 		_out_resampled.shrink_to_fit();
-		if (_resample) {
+		if (_resample_in) {
 			_in_resampled.resize(_channels);
 			_in_resampled.shrink_to_fit();
+		} else {
+			_in_resampled.clear();
+		}
+		if (_resample_out) {
 			_out_unresampled.resize(_channels);
 			_out_unresampled.shrink_to_fit();
 		} else {
-			_in_resampled.clear();
 			_out_unresampled.clear();
 		}
 		for (size_t idx = 0; idx < _channels; idx++) {
 			_in_unresampled[idx] = std::make_shared<tonplugins::memory::float_ring_t>(_samplerate);
 			_out_resampled[idx]  = std::make_shared<tonplugins::memory::float_ring_t>(_samplerate);
-			if (_resample) {
-				_in_resampled[idx]    = std::make_shared<tonplugins::memory::float_ring_t>(_fx->input_samplerate());
-				_out_unresampled[idx] = std::make_shared<tonplugins::memory::float_ring_t>(_fx->input_samplerate());
+			if (_resample_in) {
+				_in_resampled[idx] = std::make_shared<tonplugins::memory::float_ring_t>(fx_in_rate);
+			}
+			if (_resample_out) {
+				_out_unresampled[idx] = std::make_shared<tonplugins::memory::float_ring_t>(fx_out_rate);
 			}
 		}
 
-		// Reset/Allocate Resamplers
-		if (_resample) {
-			D_LOG_LOUD("Resetting resamplers...");
+		// Input resampler: host rate -> effect input rate.
+		if (_resample_in) {
+			D_LOG_LOUD("Resetting input resampler (%" PRIu64 " -> %" PRIu32 ")...", _samplerate, fx_in_rate);
 			if (!_in_resampler) {
 				_in_resampler = std::make_shared<::voicefx::resampler>();
 			}
 			_in_resampler->channels(_channels);
-			_in_resampler->ratio(_samplerate, _fx->input_samplerate());
+			_in_resampler->ratio(_samplerate, fx_in_rate);
 			_in_resampler->clear();
 			_in_resampler->load();
+		} else {
+			_in_resampler.reset();
+		}
+
+		// Output resampler: effect output rate -> host rate.
+		if (_resample_out) {
+			D_LOG_LOUD("Resetting output resampler (%" PRIu32 " -> %" PRIu64 ")...", fx_out_rate, _samplerate);
 			if (!_out_resampler) {
 				_out_resampler = std::make_shared<::voicefx::resampler>();
 			}
 			_out_resampler->channels(_channels);
-			_out_resampler->ratio(_fx->input_samplerate(), _samplerate);
+			_out_resampler->ratio(fx_out_rate, _samplerate);
 			_out_resampler->clear();
 			_out_resampler->load();
 		} else {
-			_in_resampler.reset();
 			_out_resampler.reset();
 		}
 
@@ -561,15 +618,23 @@ void vst3::effect::processor::step_process(buffer_container_t& ins, buffer_conta
 		std::vector<float const*> inptrs  = {_channels, nullptr};
 		std::vector<float*>       outptrs = {_channels, nullptr};
 
-		size_t samples = ins[0]->used();
+		// Feed whole effect input blocks only. The output can be larger than the
+		// input (Super Resolution upsamples), so reserve output space based on the
+		// effect's output block size rather than assuming it equals the input.
+		size_t in_blocksize  = _fx->input_blocksize();
+		size_t out_blocksize = _fx->output_blocksize();
+		size_t blocks        = ins[0]->used() / in_blocksize;
+		size_t samples       = blocks * in_blocksize;
 		if (samples > 0) {
+			size_t out_needed = blocks * out_blocksize;
+
 			// Prepare reads/writes
 			for (size_t idx = 0; idx < _channels; idx++) {
 				inptrs[idx]  = ins[idx]->peek(samples);
-				outptrs[idx] = outs[idx]->poke(samples);
+				outptrs[idx] = outs[idx]->poke(out_needed);
 			}
 
-			// This always processes the exact amount of data provided.
+			// Consumes the exact amount of input provided; out_samples may differ.
 			size_t in_samples  = samples;
 			size_t out_samples = 0;
 			_fx->process(inptrs.data(), in_samples, outptrs.data(), out_samples);
@@ -594,17 +659,20 @@ void vst3::effect::processor::step_resample_out(buffer_container_t& ins, buffer_
 		std::vector<float*>       outptrs = {_channels, nullptr};
 
 		{
-			std::unique_lock<std::mutex> _out_lock;
+			// Was previously a no-op default-constructed lock that shadowed the
+			// member mutex; lock the real one so the output buffers are protected.
+			std::unique_lock<std::mutex> lock(_out_lock);
 			// Prepare reads/writes
 			for (size_t idx = 0; idx < _channels; idx++) {
 				inptrs[idx]  = ins[idx]->peek(ins[idx]->used());
 				outptrs[idx] = outs[idx]->poke(outs[idx]->free());
 			}
 
-			// Resample
+			// Resample (effect output rate -> host rate). This must use the output
+			// resampler; it previously used the input resampler by mistake.
 			size_t samples_read    = 0;
 			size_t samples_written = 0;
-			_in_resampler->process(inptrs.data(), ins[0]->used(), samples_read, outptrs.data(), outs[0]->free(), samples_written);
+			_out_resampler->process(inptrs.data(), ins[0]->used(), samples_read, outptrs.data(), outs[0]->free(), samples_written);
 
 			// Confirm reads/writes
 			for (size_t idx = 0; idx < _channels; idx++) {
@@ -682,8 +750,11 @@ void vst3::effect::processor::worker()
 				decltype(_in_unresampled)& ins  = _in_unresampled;
 				decltype(_in_unresampled)& outs = _out_resampled;
 
+				// NOTE: This worker path is currently unused (process() runs the
+				// pipeline synchronously). It is kept building and in sync with the
+				// decoupled input/output resampling for possible future use.
 				// Resample input if necessary.
-				if (_resample) {
+				if (_resample_in) {
 					ins  = _in_unresampled;
 					outs = _in_resampled;
 
@@ -691,13 +762,13 @@ void vst3::effect::processor::worker()
 
 					// Swap things so the next step works.
 					ins  = outs;
-					outs = _out_unresampled;
+					outs = _resample_out ? _out_unresampled : _out_resampled;
 				} else {
 					ins  = _in_unresampled;
 					outs = _out_resampled;
 				}
 
-				if (_resample) {
+				if (_resample_in || _resample_out) {
 					step_process(ins, outs);
 				} else { // Couldn't figure out how to skip this without an if/else duplication. :/
 					std::unique_lock<std::mutex> ilock(_in_lock);
@@ -706,7 +777,7 @@ void vst3::effect::processor::worker()
 				}
 
 				// Resample output if necessary.
-				if (_resample) {
+				if (_resample_out) {
 					ins  = outs;
 					outs = _out_resampled;
 
@@ -738,14 +809,16 @@ void vst3::effect::processor::calculate_delay()
 {
 	size_t in_delay  = 0;
 	size_t out_delay = 0;
-	if (_resample) {
-		in_delay  = ::voicefx::resampler::calculate_delay(_samplerate, _fx->input_samplerate());
-		out_delay = ::voicefx::resampler::calculate_delay(_fx->input_samplerate(), _samplerate);
-		D_LOG_LOUD("In/Out delay %zu %zu", in_delay, out_delay);
+	if (_resample_in) {
+		in_delay = ::voicefx::resampler::calculate_delay(_samplerate, _fx->input_samplerate());
 	}
+	if (_resample_out) {
+		out_delay = ::voicefx::resampler::calculate_delay(_fx->output_samplerate(), _samplerate);
+	}
+	D_LOG_LOUD("In/Out resampler delay %zu %zu", in_delay, out_delay);
 
 	_local_delay = _fx->input_blocksize();
-	if (_resample) {
+	if (_resample_in || _resample_out) {
 		_local_delay += in_delay + out_delay;
 		_local_delay *= 2;
 	}
@@ -754,9 +827,7 @@ void vst3::effect::processor::calculate_delay()
 	// Calculate absolute effect delay
 	_delay = _fx->delay();
 	_delay += _local_delay;
-	if (_resample) {
-		_delay += in_delay + out_delay;
-	}
+	_delay += in_delay + out_delay;
 	D_LOG("Latency is estimated to be %" PRId64 " samples.", _delay);
 }
 

@@ -35,15 +35,28 @@ vst3::effect::controller::controller()
 
 #ifndef TONPLUGINS_DEMO
 	{
+		// Keep the first three entries (Noise/Echo/Both) in their original order so
+		// that presets saved by older versions keep meaning the same thing. The two
+		// new entries need the NVIDIA AFX 2.x runtime and models.
 		auto p = new Steinberg::Vst::StringListParameter(STR("Mode"), PARAMETER_MODE, STR("Removal"));
 		p->appendString(STR("Noise"));
 		p->appendString(STR("Echo"));
 		p->appendString(STR("Both"));
+		p->appendString(STR("Studio Voice"));
+		p->appendString(STR("Speaker Focus"));
 		parameters.addParameter(p);
 	}
 	{
 		auto p = new Steinberg::Vst::RangeParameter(STR("Intensity"), PARAMETER_INTENSITY, STR("%"), 0.0, 100.0, 100.0, 0, Steinberg::Vst::ParameterInfo::ParameterFlags::kCanAutomate);
 		//p->setPrecision(2);
+		parameters.addParameter(p);
+	}
+	{
+		// Super Resolution on/off. Adds high-frequency detail on top of the
+		// Noise/Echo/Both modes (ignored for Studio Voice / Speaker Focus).
+		auto p = new Steinberg::Vst::StringListParameter(STR("Super Resolution"), PARAMETER_SUPERRES);
+		p->appendString(STR("Off"));
+		p->appendString(STR("On"));
 		parameters.addParameter(p);
 	}
 #endif
@@ -80,6 +93,17 @@ tresult PLUGIN_API vst3::effect::controller::setComponentState(IBStream* state)
 	}
 	if (!streamer.readFloat(_intensity)) {
 		return kResultFalse;
+	}
+	// Fields added later. Presets saved by older versions won't have them, so a
+	// failed read just means "use the default" instead of being an error.
+	if (!streamer.readBool(_enable_superres)) {
+		_enable_superres = false;
+	}
+	if (!streamer.readBool(_enable_studio_voice)) {
+		_enable_studio_voice = false;
+	}
+	if (!streamer.readBool(_enable_speaker_focus)) {
+		_enable_speaker_focus = false;
 	}
 #endif
 

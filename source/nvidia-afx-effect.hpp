@@ -26,6 +26,8 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <vector>
 #include "nvidia-afx.hpp"
 #include "nvidia-cuda-context.hpp"
 #include "nvidia-cuda-stream.hpp"
@@ -38,6 +40,10 @@ namespace nvidia::afx {
 		std::recursive_mutex  _lock;
 		std::filesystem::path _model_path;
 		std::string           _model_path_str;
+		// Full model-file paths for the currently selected effect. Chained effects
+		// (e.g. Super Resolution) need more than one, passed via NvAFX_SetStringList.
+		// Kept as members so the strings outlive the SDK call.
+		std::vector<std::string> _model_path_strs;
 
 		std::vector<std::shared_ptr<void>> _fx;
 		std::atomic_uint8_t                _fx_channels;
@@ -46,6 +52,9 @@ namespace nvidia::afx {
 		std::atomic_bool _fx_model;
 		std::atomic_bool _fx_denoise;
 		std::atomic_bool _fx_dereverb;
+		std::atomic_bool _fx_superres;     // Super Resolution (adds high-frequency detail).
+		std::atomic_bool _fx_studiovoice;  // Studio Voice (repairs low-quality microphones). NVIDIA AFX 2.x.
+		std::atomic_bool _fx_speakerfocus; // Speaker Focus (keeps only the main speaker). NVIDIA AFX 2.x.
 #endif
 
 #ifndef TONPLUGINS_DEMO
@@ -64,6 +73,11 @@ namespace nvidia::afx {
 
 		template<typename T>
 		void set(NvAFX_ParameterSelector key, T value);
+
+		// Applies one or more model files to every channel's effect handle.
+		// A single file uses NvAFX_SetString; multiple files (chained effects)
+		// use NvAFX_SetStringList.
+		void set_model_paths(std::vector<std::string> const& paths);
 
 		public /* Effect Information */:
 		uint32_t input_samplerate();
@@ -87,6 +101,21 @@ namespace nvidia::afx {
 
 		bool dereverb_enabled();
 		void enable_dereverb(bool v);
+
+		// Super Resolution: runs the cleanup at 16kHz and rebuilds a 48kHz signal
+		// with more high-frequency detail. Only combines with denoise/dereverb.
+		bool superres_enabled();
+		void enable_superres(bool v);
+
+		// Studio Voice: an all-in-one enhancement that recovers speech captured on
+		// low-end microphones. Requires the NVIDIA AFX 2.x runtime and model.
+		bool studio_voice_enabled();
+		void enable_studio_voice(bool v);
+
+		// Speaker Focus: keeps the prominent speaker and suppresses other voices.
+		// Requires the NVIDIA AFX 2.x runtime and model.
+		bool speaker_focus_enabled();
+		void enable_speaker_focus(bool v);
 #endif
 
 #ifndef TONPLUGINS_DEMO

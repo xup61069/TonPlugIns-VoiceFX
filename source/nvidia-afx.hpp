@@ -93,6 +93,11 @@ namespace nvidia::afx {
 		decltype(NvAFX_GetSupportedDevices)* GetSupportedDevices;
 		decltype(NvAFX_Run)*                 Run;
 		decltype(NvAFX_Reset)*               Reset;
+		// Optional symbols (only present in newer NVAudioEffects.dll builds).
+		// Used for chained effects such as Super Resolution and Speaker Focus.
+		// They stay 'nullptr' on older runtimes; callers must null-check them.
+		decltype(NvAFX_CreateChainedEffect)* CreateChainedEffect = nullptr;
+		decltype(NvAFX_SetStringList)*       SetStringList       = nullptr;
 
 		public /* Singleton */:
 		static std::shared_ptr<::nvidia::afx::afx> instance();

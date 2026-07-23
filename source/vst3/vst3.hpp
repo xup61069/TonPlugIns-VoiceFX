@@ -29,3 +29,4 @@
 
 #define PARAMETER_MODE FOURCC('M', 'o', 'd', 'e')
 #define PARAMETER_INTENSITY FOURCC('I', 'n', 't', 's')
+#define PARAMETER_SUPERRES FOURCC('S', 'u', 'p', 'R')

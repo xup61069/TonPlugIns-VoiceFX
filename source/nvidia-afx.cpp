@@ -115,6 +115,20 @@ nvidia::afx::afx::afx() : _redist_path(find_nvafx_redistributable()), _library()
 		P_AFX_LOAD_SYMBOL(Run);
 		P_AFX_LOAD_SYMBOL(Reset);
 #undef P_AFX_LOAD_SYMBOL
+
+		// Optional symbols. Older runtimes may not export these, so we tolerate
+		// their absence and only fail (with a clear message) if the user actually
+		// enables a feature that needs them.
+#define P_AFX_LOAD_SYMBOL_OPTIONAL(V)                                                            \
+	try {                                                                                        \
+		V = reinterpret_cast<decltype(V)>(_library->load_symbol("NvAFX_" #V));                   \
+	} catch (...) {                                                                              \
+		V = nullptr;                                                                             \
+		D_LOG("Optional symbol 'NvAFX_" #V "' unavailable; effects that need it are disabled."); \
+	}
+		P_AFX_LOAD_SYMBOL_OPTIONAL(CreateChainedEffect);
+		P_AFX_LOAD_SYMBOL_OPTIONAL(SetStringList);
+#undef P_AFX_LOAD_SYMBOL_OPTIONAL
 	}
 
 	{ // Log all available effects.
@@ -263,11 +277,17 @@ std::filesystem::path nvidia::afx::afx::model_path(NvAFX_EffectSelector effect)
 	D_LOG_LOUD("");
 	std::filesystem::path path = redistributable_path();
 	path /= "models";
+	// NOTE: These filenames must match the models shipped in your NVIDIA
+	// redistributable's "models" folder. They can change between SDK versions
+	// (e.g. some builds add "_v2" or a "sm_XX/" sub-folder). The authoritative
+	// per-effect mapping used at run time lives in nvidia-afx-effect.cpp; this
+	// table is only used for the start-up "is a model present?" probe.
 	for (auto& kv : std::map<std::string, std::string>{
 			 {NVAFX_EFFECT_DENOISER, "denoiser_48k.trtpkg"},
 			 {NVAFX_EFFECT_DEREVERB, "dereverb_48k.trtpkg"},
-			 {NVAFX_EFFECT_DEREVERB_DENOISER, "denoiser_48k.trtpkg"},
+			 {NVAFX_EFFECT_DEREVERB_DENOISER, "dereverb_denoiser_48k.trtpkg"},
 			 {NVAFX_EFFECT_AEC, "aec_48k.trtpkg"},
+			 {NVAFX_EFFECT_SUPERRES, "superres_16kto48k.trtpkg"},
 		 }) {
 		if (kv.first == effect) {
 			path /= kv.second;
