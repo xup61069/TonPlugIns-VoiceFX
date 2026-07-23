@@ -1,10 +1,14 @@
 # NVIDIA Audio Effects SDK feature update
 
 This branch wires additional NVIDIA Maxine / Audio Effects (AFX) SDK features
-into VoiceFX. It was prepared **without a build/run environment**, so the code is
-written to match the existing style and the AFX headers/docs, but it has **not**
-been compiled or tested. Please build and test it inside the TonPlugIns build
-framework on a machine with a supported NVIDIA GPU before shipping.
+into VoiceFX.
+
+**Validation status:** The full plugin has **not** been built (it needs the
+proprietary TonPlugIns build framework + VST3 SDK, which are not public). However,
+the NVIDIA-facing logic of the Super Resolution work (Tier B) **was verified on
+real hardware** — an RTX 5080 with AFX SDK 1.6.1.2 — using the standalone program
+in `tools/afx-smoketest/`. See that folder's README for the exact output. The VST3
+glue (resampler, parameters, state) still needs the framework to build and test.
 
 ## What was added
 
@@ -53,18 +57,22 @@ and confirm/adjust the names marked `// VERIFY` in
 
 | Feature | Selector | Model file(s) used | Confidence |
 |---|---|---|---|
-| Denoise | `denoiser` | `denoiser_48k.trtpkg` | existing |
-| Dereverb | `dereverb` | `dereverb_48k.trtpkg` | existing |
-| Both | `dereverb_denoiser` | `dereverb_denoiser_48k.trtpkg` | existing |
-| Denoise + SuperRes | `denoiser16k_superres16kto48k` | `denoiser_16k.trtpkg`, `superres_16kto48k.trtpkg` | needs check |
-| Dereverb + SuperRes | `dereverb16k_superres16kto48k` | `dereverb_16k.trtpkg`, `superres_16kto48k.trtpkg` | needs check |
-| Both + SuperRes | `dereverb_denoiser16k_superres16kto48k` | `dereverb_denoiser_16k.trtpkg`, `superres_16kto48k.trtpkg` | needs check |
-| Studio Voice | `studio_voice_high_quality` | `studio_voice_48k.trtpkg` | needs SDK 2.x |
-| Speaker Focus | `speaker_focus` | `speaker_focus_48k.trtpkg` | needs SDK 2.x |
+| Denoise | `denoiser` | `denoiser_48k.trtpkg` | verified (SDK 1.6.1.2) |
+| Dereverb | `dereverb` | `dereverb_48k.trtpkg` | file present in 1.6.1.2 |
+| Both | `dereverb_denoiser` | `dereverb_denoiser_48k.trtpkg` | file present in 1.6.1.2 |
+| Denoise + SuperRes | `denoiser16k_superres16kto48k` | `denoiser_16k.trtpkg`, `superres_16kto48k.trtpkg` | **verified (RTX 5080)** |
+| Dereverb + SuperRes | `dereverb16k_superres16kto48k` | `dereverb_16k.trtpkg`, `superres_16kto48k.trtpkg` | files present in 1.6.1.2 |
+| Both + SuperRes | `dereverb_denoiser16k_superres16kto48k` | `dereverb_denoiser_16k.trtpkg`, `superres_16kto48k.trtpkg` | **verified (RTX 5080)** |
+| Studio Voice | `studio_voice_high_quality` | `studio_voice_48k.trtpkg` | needs SDK 2.x (absent in 1.6.1.2) |
+| Speaker Focus | `speaker_focus` | `speaker_focus_48k.trtpkg` | needs SDK 2.x (absent in 1.6.1.2) |
 
-Effect selector strings come from NVIDIA's AFX 2.1.0 "Type Definitions"
-reference. `speaker_focus` is a best guess for the selector string — confirm it in
-your header.
+All `*_48k` / `*_16k` / `superres_16kto48k` model file names above were confirmed
+against the `models` folder of the installed AFX SDK 1.6.1.2. The rows marked
+**verified (RTX 5080)** were actually created, loaded and run by
+`tools/afx-smoketest`. Effect selector strings come from NVIDIA's AFX 2.1.0 "Type
+Definitions" reference; `speaker_focus` is still a best guess — confirm it once you
+have a 2.x header. Studio Voice / Speaker Focus models are **not** part of 1.6.1.2,
+so those two paths could not be run here.
 
 ## Known limitations / not done
 - **Acoustic Echo Cancellation (AEC)** is intentionally not wired in: it needs a
