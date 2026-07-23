@@ -21,8 +21,11 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STR
 option(VOICEFX_BUILD_HOSTING_TOOLS "Also build the SDK validator/host tools" OFF)
 
 # Trim the VST3 SDK build down to what a plugin needs.
-set(SMTG_ENABLE_VSTGUI_SUPPORT       OFF CACHE BOOL "" FORCE)
-set(SMTG_ADD_VSTGUI                  OFF CACHE BOOL "" FORCE)
+# VSTGUI is ON: we ship a small custom editor (see resource/voicefx.uidesc and
+# vst3_effect_controller.cpp). Turning this on makes the SDK's root CMakeLists
+# build the vstgui / vstgui_uidescription / vstgui_support targets we link below.
+set(SMTG_ENABLE_VSTGUI_SUPPORT       ON  CACHE BOOL "" FORCE)
+set(SMTG_ADD_VSTGUI                  ON  CACHE BOOL "" FORCE)
 set(SMTG_ENABLE_VST3_PLUGIN_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(SMTG_ENABLE_VST3_HOSTING_EXAMPLES ${VOICEFX_BUILD_HOSTING_TOOLS} CACHE BOOL "" FORCE)
 set(SMTG_CREATE_PLUGIN_LINK          OFF CACHE BOOL "" FORCE)
@@ -54,6 +57,13 @@ set(VOICEFX_SOURCES
 	src/vst3.cpp
 	src/vst3_effect_processor.cpp
 	src/vst3_effect_controller.cpp
+
+	# Windows DLL entry point from the VST3 SDK. It defines the global
+	# `moduleHandle` and records it in DllMain. Without a custom editor nothing
+	# referenced it, so we got away without it; VSTGUI's win32 bundle support
+	# now calls getPlatformModuleHandle() to locate the .uidesc inside the
+	# bundle, which pulls in this symbol. Also lets InitModule/DeinitModule run.
+	"${VST3_SDK_DIR}/public.sdk/source/main/dllmain.cpp"
 )
 
 smtg_add_vst3plugin(VoiceFX PACKAGE_NAME "VoiceFX KDver" SOURCES_LIST ${VOICEFX_SOURCES})
@@ -71,4 +81,26 @@ target_include_directories(VoiceFX PRIVATE
 	"${CMAKE_CURRENT_SOURCE_DIR}/../third-party/nvidia-maxine-afx-sdk/nvafx/include"
 )
 
-target_link_libraries(VoiceFX PRIVATE sdk secret-rabbit-code)
+target_link_libraries(VoiceFX PRIVATE sdk secret-rabbit-code vstgui_support)
+
+# Custom editor UI. The .uidesc is copied into the bundle at
+# <VoiceFX KDver.vst3>/Contents/Resources/voicefx.uidesc, where VST3Editor
+# looks it up by name at runtime.
+#
+# We copy it ourselves instead of using smtg_target_add_plugin_resources():
+# the SDK's copy command doesn't quote its destination path, so the space in
+# the package name ("VoiceFX KDver.vst3") splits the path and the copy fails.
+# A VERBATIM post-build command quotes the path correctly. The package path /
+# resources subfolder come straight from the SDK's own target properties, so
+# this tracks wherever the bundle is written.
+get_target_property(_voicefx_pkg_path VoiceFX SMTG_PLUGIN_PACKAGE_PATH)
+get_target_property(_voicefx_pkg_res  VoiceFX SMTG_PLUGIN_PACKAGE_RESOURCES)
+add_custom_command(TARGET VoiceFX POST_BUILD
+	COMMAND ${CMAKE_COMMAND} -E make_directory
+		"${_voicefx_pkg_path}/${_voicefx_pkg_res}"
+	COMMAND ${CMAKE_COMMAND} -E copy_if_different
+		"${CMAKE_CURRENT_SOURCE_DIR}/resource/voicefx.uidesc"
+		"${_voicefx_pkg_path}/${_voicefx_pkg_res}/voicefx.uidesc"
+	COMMENT "[VoiceFX] Copying voicefx.uidesc into the plugin bundle"
+	VERBATIM
+)

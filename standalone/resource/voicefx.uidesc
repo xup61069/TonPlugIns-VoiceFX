@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<vstgui-ui-description version="1">
+	<!--
+	  Simple flat gray editor for the standalone VoiceFX KDver build.
+	  No bitmaps: every control draws itself (menu / slider fill / checkbox),
+	  so the whole UI lives in this one description file.
+
+	  control-tag values must equal the VST3 parameter IDs (FOURCC) registered
+	  in vst3_effect_controller.cpp, so VST3Editor binds each control to its
+	  parameter automatically:
+	    Mode      = FOURCC('M','o','d','e') = 1299145829
+	    Intensity = FOURCC('I','n','t','s') = 1231975539
+	    SuperRes  = FOURCC('S','u','p','R') = 1400205394
+	-->
+	<colors>
+		<color name="vfx-bg" rgba="#4a4a4aff"/>
+		<color name="vfx-field" rgba="#353535ff"/>
+		<color name="vfx-line" rgba="#6e6e6eff"/>
+		<color name="vfx-text" rgba="#ebebebff"/>
+		<color name="vfx-subtext" rgba="#b6b6b6ff"/>
+		<color name="vfx-accent" rgba="#3c9be8ff"/>
+	</colors>
+	<template background-color="vfx-bg" background-color-draw-style="filled" class="CViewContainer" maxSize="380, 240" minSize="380, 240" name="view" origin="0, 0" size="380, 240" transparent="false">
+		<!-- Title -->
+		<view class="CTextLabel" title="VoiceFX KDver" origin="20, 16" size="340, 26" transparent="true" font="~ NormalFontBig" font-color="vfx-text" text-alignment="left"/>
+		<view class="CTextLabel" title="NVIDIA Audio Effects" origin="20, 42" size="340, 18" transparent="true" font="~ NormalFontSmall" font-color="vfx-subtext" text-alignment="left"/>
+
+		<!-- Mode (dropdown) -->
+		<view class="CTextLabel" title="Mode" origin="24, 84" size="80, 24" transparent="true" font="~ NormalFont" font-color="vfx-text" text-alignment="left"/>
+		<view class="COptionMenu" control-tag="Mode" origin="112, 82" size="244, 26" back-color="vfx-field" frame-color="vfx-line" font="~ NormalFont" font-color="vfx-text" text-alignment="left" menu-popup-style="true" style-round-rect="true" round-rect-radius="4"/>
+
+		<!-- Intensity (slider + value readout) -->
+		<view class="CTextLabel" title="Intensity" origin="24, 124" size="80, 24" transparent="true" font="~ NormalFont" font-color="vfx-text" text-alignment="left"/>
+		<view class="CSlider" control-tag="Intensity" origin="112, 126" size="192, 20" orientation="horizontal" mode="free click" draw-back="true" draw-frame="true" draw-value="true" draw-back-color="vfx-field" draw-frame-color="vfx-line" draw-value-color="vfx-accent" transparent="true" wheel-inc-value="0.05"/>
+		<view class="CTextLabel" control-tag="Intensity" origin="312, 124" size="44, 24" transparent="true" font="~ NormalFontSmall" font-color="vfx-subtext" text-alignment="right"/>
+
+		<!-- Super Resolution (toggle) -->
+		<view class="CCheckBox" control-tag="SuperRes" title="Super Resolution" origin="112, 168" size="220, 24" font="~ NormalFont" font-color="vfx-text" boxframe-color="vfx-line" boxfill-color="vfx-field" checkmark-color="vfx-accent" frame-width="1"/>
+
+		<view class="CTextLabel" title="GPU: default  ·  KDver" origin="20, 210" size="340, 18" transparent="true" font="~ NormalFontSmall" font-color="vfx-subtext" text-alignment="left"/>
+	</template>
+	<control-tags>
+		<control-tag name="Mode" tag="1299145829"/>
+		<control-tag name="Intensity" tag="1231975539"/>
+		<control-tag name="SuperRes" tag="1400205394"/>
+	</control-tags>
+</vstgui-ui-description>

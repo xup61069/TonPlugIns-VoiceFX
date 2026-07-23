@@ -25,7 +25,11 @@
 
 #include <warning-disable.hpp>
 #include <base/source/fstreamer.h>
+#include <pluginterfaces/vst/ivsteditcontroller.h>
+#include <vstgui/plugin-bindings/vst3editor.h>
 #include <warning-enable.hpp>
+
+#include <cstring>
 
 vst3::effect::controller::controller()
 {
@@ -124,8 +128,12 @@ FUnknown* vst3::effect::controller::create(void* data)
 Steinberg::IPlugView* PLUGIN_API vst3::effect::controller::createView(Steinberg::FIDString name)
 {
 	D_LOG_LOUD("");
-	// Standalone build ships no custom VSTGUI editor; the host draws a generic UI
-	// from the registered parameters (Element does this fine).
-	(void)name;
+	// Simple flat gray editor described entirely in resource/voicefx.uidesc.
+	// VST3Editor binds each control to its parameter by matching the control-tag
+	// values in the .uidesc to our FOURCC parameter IDs, so no extra wiring is
+	// needed here. The .uidesc is shipped in the bundle's Contents/Resources.
+	if (name && std::strcmp(name, Steinberg::Vst::ViewType::kEditor) == 0) {
+		return new VSTGUI::VST3Editor(this, "view", "voicefx.uidesc");
+	}
 	return nullptr;
 }

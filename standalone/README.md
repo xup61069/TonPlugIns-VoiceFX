@@ -14,9 +14,27 @@ NVIDIA Audio Effects SDK 1.6.1.2, MSVC 2022, VST3 SDK 3.8.0. The Steinberg
   `warning-disable/enable.hpp`.
 - `src/` — the reused sources plus a standalone NVIDIA loader (`nvidia-afx.*`,
   default GPU, no custom CUDA/D3D context), CUDA stubs, `lib.cpp`, and the VST3
-  factory (`vst3.cpp`). The custom VSTGUI editor is dropped; the host draws a
-  generic UI from the parameters.
+  factory (`vst3.cpp`).
+- `resource/voicefx.uidesc` — a small flat-gray VSTGUI editor (see **UI** below).
 - `CMakeLists.txt` — fetches nothing; points at a local VST3 SDK checkout.
+
+## UI
+The plugin ships a simple gray editor built with VSTGUI, described entirely in
+`resource/voicefx.uidesc` (no bitmaps — every control draws itself):
+- **Mode** — dropdown (Noise / Echo / Both / Studio Voice / Speaker Focus).
+- **Intensity** — horizontal slider, 0–100 %, with a numeric read-out.
+- **Super Resolution** — on/off checkbox.
+
+VST3Editor binds each control to its parameter by matching the `control-tag`
+values in the `.uidesc` to the plugin's FOURCC parameter IDs, so there is no
+hand-written binding code — `createView()` just returns the editor. The `.uidesc`
+is copied into the bundle at `Contents/Resources/voicefx.uidesc`, where VSTGUI
+finds it at runtime.
+
+Two build details make this work: VSTGUI's win32 bundle support needs the SDK's
+`dllmain.cpp` (for the module handle used to locate the resource), and the
+`.uidesc` is copied with our own post-build command because the SDK's resource
+helper mishandles the space in the package name.
 
 ## Prerequisites
 1. **Visual Studio 2022** (or Build Tools) with the C++ workload.
@@ -36,18 +54,18 @@ cmake --build build --config Release --target VoiceFX
 ```
 The plugin is produced at:
 ```
-build\VST3\Release\VoiceFX.vst3
+build\VST3\Release\VoiceFX KDver.vst3
 ```
 
 Optional — also build the Steinberg validator to test it:
 ```bat
 cmake -S . -B build -DVOICEFX_BUILD_HOSTING_TOOLS=ON
 cmake --build build --config Release --target validator
-build\bin\Release\validator.exe build\VST3\Release\VoiceFX.vst3
+build\bin\Release\validator.exe "build\VST3\Release\VoiceFX KDver.vst3"
 ```
 
 ## Install / run
-Copy the `VoiceFX.vst3` bundle into a VST3 folder your host scans, e.g. your
+Copy the `VoiceFX KDver.vst3` bundle into a VST3 folder your host scans, e.g. your
 user folder `%LOCALAPPDATA%\Programs\Common\VST3\` or the system
 `C:\Program Files\Common Files\VST3\`, then rescan in Element.
 
@@ -58,7 +76,8 @@ user folder `%LOCALAPPDATA%\Programs\Common\VST3\` or the system
 
 ## Notes / limitations
 - Runs on the default GPU (no multi-GPU selection).
-- No custom editor UI yet (generic parameter view).
+- Ships a simple flat-gray VSTGUI editor (Mode / Intensity / Super Resolution);
+  see **UI** above.
 - Studio Voice / Speaker Focus modes need the NVIDIA AFX **2.x** models, which are
   not part of SDK 1.6.1.2; selecting them will fail to create the effect until a
   2.x runtime + models are installed.
