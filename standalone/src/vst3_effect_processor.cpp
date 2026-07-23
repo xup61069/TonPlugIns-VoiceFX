@@ -232,12 +232,21 @@ tresult PLUGIN_API vst3::effect::processor::process(ProcessData& data)
 
 		// Exit-early if the inputs mismatch our configuration.
 		if ((data.inputs[0].numChannels != _channels) || (data.outputs[0].numChannels != _channels)) {
+			D_LOG("BAIL channel mismatch: in=%d out=%d configured=%zu", data.inputs[0].numChannels, data.outputs[0].numChannels, _channels);
 			return kNotInitialized;
 		}
 
-		// If the host is ignoring our return codes, do nothing.
+		// If we haven't been initialised yet, do it now. Some hosts call process()
+		// before setProcessing(true); self-initialise rather than staying silent.
 		if (_dirty) {
-			return kNotInitialized;
+			if (_channels > 0 && _samplerate > 0) {
+				D_LOG("process() found dirty state; self-initialising (rate=%lld channels=%zu).", (long long)_samplerate, _channels);
+				reset();
+			}
+			if (_dirty) {
+				D_LOG("BAIL still dirty after reset attempt.");
+				return kNotInitialized;
+			}
 		}
 
 		// Exit-early if host application ignores our delay request.
@@ -246,6 +255,13 @@ tresult PLUGIN_API vst3::effect::processor::process(ProcessData& data)
 				"Host only provided %zu samples of the required %zu samples to overcome latency. Further behavior is "
 				"undefined.",
 				data.numSamples, _delay);
+		}
+
+		{ // Throttled confirmation that audio is actually flowing through process().
+			static std::atomic<int> _dbg{0};
+			if ((_dbg++ % 400) == 0) {
+				D_LOG("process running: numSamples=%d channels=%zu delay=%lld in_used=%zu out_used=%zu", data.numSamples, _channels, (long long)_delay, _in_unresampled.size() ? _in_unresampled[0]->used() : 0, _out_resampled.size() ? _out_resampled[0]->used() : 0);
+			}
 		}
 
 // If there were any parameter changes, handle them.
@@ -488,7 +504,7 @@ void vst3::effect::processor::reset()
 		_resample_out        = (static_cast<uint32_t>(_samplerate) != fx_out_rate);
 
 		// Allocate Buffers
-		D_LOG_LOUD("Reallocating buffers for host %" PRIu64 " Hz, effect %" PRIu32 " Hz in / %" PRIu32 " Hz out...", _samplerate, fx_in_rate, fx_out_rate);
+		D_LOG("reset: host %" PRIu64 " Hz, effect %" PRIu32 " Hz in / %" PRIu32 " Hz out, channels=%zu, resample in/out=%d/%d.", _samplerate, fx_in_rate, fx_out_rate, _channels, (int)_resample_in, (int)_resample_out);
 		_in_unresampled.resize(_channels);
 		_in_unresampled.shrink_to_fit();
 		_out_resampled.resize(_channels);

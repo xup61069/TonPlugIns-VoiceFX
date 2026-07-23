@@ -56,7 +56,7 @@ set(VOICEFX_SOURCES
 	src/vst3_effect_controller.cpp
 )
 
-smtg_add_vst3plugin(VoiceFX ${VOICEFX_SOURCES})
+smtg_add_vst3plugin(VoiceFX PACKAGE_NAME "VoiceFX KDver" SOURCES_LIST ${VOICEFX_SOURCES})
 
 target_compile_features(VoiceFX PUBLIC cxx_std_17)
 

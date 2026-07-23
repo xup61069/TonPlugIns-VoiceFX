@@ -49,6 +49,25 @@ namespace tonplugins {
 			OutputDebugStringA(line.c_str());
 #endif
 			std::fprintf(stderr, "[%s] %s\n", _name.c_str(), buf);
+
+			// Also append to a file so behaviour inside a host (where stdout/stderr
+			// are invisible) can be inspected. Override the path with VOICEFX_LOG.
+			if (const char* p = std::getenv("VOICEFX_LOG")) {
+				append_file(p, buf);
+			} else {
+				append_file("C:\\VoiceFX\\voicefx-kdver.log", buf);
+			}
 		}
+
+		private:
+		void append_file(const char* path, const char* msg)
+		{
+			if (FILE* f = std::fopen(path, "a")) {
+				std::fprintf(f, "[%s] %s\n", _name.c_str(), msg);
+				std::fclose(f);
+			}
+		}
+
+		public:
 	};
 } // namespace tonplugins

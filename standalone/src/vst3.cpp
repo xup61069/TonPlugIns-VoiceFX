@@ -16,11 +16,11 @@ using namespace Steinberg::Vst;
 
 BEGIN_FACTORY_DEF("Xaymar", "https://xaymar.com/", "mailto:support@xaymar.com")
 
-DEF_CLASS2(INLINE_UID_FROM_FUID(vst3::effect::processor_uid), PClassInfo::kManyInstances, kVstAudioEffectClass, "VoiceFX",
-           Vst::kDistributable, Vst::PlugType::kFxRestoration, VOICEFX_VERSION_STR, kVstVersionString,
+DEF_CLASS2(INLINE_UID_FROM_FUID(vst3::effect::processor_uid), PClassInfo::kManyInstances, kVstAudioEffectClass,
+           "VoiceFX KDver", Vst::kDistributable, Vst::PlugType::kFxRestoration, VOICEFX_VERSION_STR, kVstVersionString,
            vst3::effect::processor::create)
 
 DEF_CLASS2(INLINE_UID_FROM_FUID(vst3::effect::controller_uid), PClassInfo::kManyInstances, kVstComponentControllerClass,
-           "VoiceFX Controller", 0, "", VOICEFX_VERSION_STR, kVstVersionString, vst3::effect::controller::create)
+           "VoiceFX KDver Controller", 0, "", VOICEFX_VERSION_STR, kVstVersionString, vst3::effect::controller::create)
 
 END_FACTORY

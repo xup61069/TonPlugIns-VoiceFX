@@ -104,8 +104,13 @@ void voicefx::resampler::load()
 		if (instance) {
 			src_reset(reinterpret_cast<SRC_STATE*>(instance.get()));
 		} else {
+			// One MONO libsamplerate state per channel: process() feeds each state a
+			// single channel's (non-interleaved) buffer. Creating the state with
+			// _channels here made it expect interleaved N-channel data and read past
+			// the mono buffers, corrupting the output (silent/garbage) whenever the
+			// host runs at a rate other than 48 kHz.
 			int error = 0;
-			instance  = std::shared_ptr<void>(reinterpret_cast<void*>(src_new(SRC_SINC_BEST_QUALITY, static_cast<int>(_channels), &error)), [](void* v) { src_delete(reinterpret_cast<SRC_STATE*>(v)); });
+			instance  = std::shared_ptr<void>(reinterpret_cast<void*>(src_new(SRC_SINC_BEST_QUALITY, 1, &error)), [](void* v) { src_delete(reinterpret_cast<SRC_STATE*>(v)); });
 			if (error != 0) {
 				throw_log("%s", src_strerror(error));
 			}
