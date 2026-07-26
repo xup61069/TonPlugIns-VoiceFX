@@ -14,6 +14,16 @@
 	  Mode entries (Noise / Reverb / Both / Echo Cancel) come from the parameter's
 	  string list, so this file does not list them. Echo Cancel = AEC: it reads the
 	  reference signal from the RIGHT input channel (left = microphone).
+
+	  Level (Intensity) is a 21-step control: 0, 5, 10 ... 100 % (wheel-inc-value
+	  0.05 = one step). The snapping itself is done by the parameter, not by this
+	  file; see stepped_percent_parameter in vst3_effect_controller.cpp.
+
+	  Level only changes the sound for Noise / Reverb / Both with Super Resolution
+	  OFF -- Echo Cancel has no intensity control and the chained Super Resolution
+	  effects ignore the value. It also applies ~0.2s after the slider stops
+	  moving, because the NVIDIA SDK can only take a new value by rebuilding the
+	  effect. See the README and nvidia-afx-effect.cpp.
 	-->
 	<colors>
 		<color name="vfx-bg" rgba="#4a4a4aff"/>

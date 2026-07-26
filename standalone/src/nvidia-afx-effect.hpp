@@ -23,6 +23,7 @@
 
 #pragma once
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -45,24 +46,33 @@ namespace nvidia::afx {
 		// Kept as members so the strings outlive the SDK call.
 		std::vector<std::string> _model_path_strs;
 
+		// Every flag below is read before it is first written (the setters only act on
+		// a real change), so they need an explicit initial value -- reading an
+		// indeterminate std::atomic is undefined behaviour.
 		std::vector<std::shared_ptr<void>> _fx;
-		std::atomic_uint8_t                _fx_channels;
-		std::atomic_bool                   _fx_dirty;
+		std::atomic_uint8_t                _fx_channels{0};
+		std::atomic_bool                   _fx_dirty{true};
 #ifndef TONPLUGINS_DEMO
-		std::atomic_bool _fx_model;
-		std::atomic_bool _fx_denoise;
-		std::atomic_bool _fx_dereverb;
-		std::atomic_bool _fx_superres; // Super Resolution (adds high-frequency detail).
+		std::atomic_bool _fx_denoise{false};
+		std::atomic_bool _fx_dereverb{false};
+		std::atomic_bool _fx_superres{false}; // Super Resolution (adds high-frequency detail).
 		// Acoustic Echo Cancellation. Unlike the other effects it takes TWO input
 		// channels (0 = microphone, 1 = reference / far-end) and produces ONE cleaned
 		// channel, so it uses a single effect handle instead of one per channel.
-		std::atomic_bool _fx_aec;
+		std::atomic_bool _fx_aec{false};
 #endif
 
 #ifndef TONPLUGINS_DEMO
-		std::atomic_bool   _cfg_dirty;
-		std::atomic<float> _cfg_intensity;
-		std::atomic_bool   _cfg_vad;
+		// What the user asked for...
+		std::atomic<float> _cfg_intensity{1.f};
+		std::atomic_bool   _cfg_vad{false};
+		// ...and what is actually baked into the effect that is currently loaded.
+		// These only differ while the Level slider is being dragged; see
+		// config_reload_due().
+		std::atomic<float> _fx_intensity{1.f};
+		std::atomic_bool   _fx_vad{false};
+		// steady_clock tick count of the last change, for the settle timer.
+		std::atomic<int64_t> _cfg_changed_at{0};
 #endif
 
 		public:
@@ -80,6 +90,19 @@ namespace nvidia::afx {
 		// A single file uses NvAFX_SetString; multiple files (chained effects)
 		// use NvAFX_SetStringList.
 		void set_model_paths(std::vector<std::string> const& paths);
+
+		// Whether the currently selected effect has an intensity ratio / VAD at all.
+		bool config_applies() const;
+
+		// Pushes the user-facing settings (intensity, VAD) onto every effect handle
+		// and records them as the loaded ones. Only has any effect before
+		// NvAFX_Load; see load().
+		void apply_config();
+
+		// True once the user has stopped moving the Level slider and the value the
+		// running effect was built with is out of date. Applying a new value means
+		// rebuilding the effect (~85ms), so it must not happen on every mouse-move.
+		bool config_reload_due() const;
 
 		public /* Effect Information */:
 		uint32_t input_samplerate();
@@ -125,8 +148,6 @@ namespace nvidia::afx {
 #endif
 
 		void load();
-
-		void clear();
 
 		void process(const float** input, float** output, size_t samples);
 

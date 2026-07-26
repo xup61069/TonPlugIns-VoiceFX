@@ -27,6 +27,31 @@ NVIDIA Audio Effects SDK 1.6.1.2, MSVC 2022, VST3 SDK 3.8.0. The Steinberg
 **Super Resolution** (checkbox) rebuilds high-frequency detail on top of the
 Noise / Reverb / Both modes. It is ignored for Echo Cancel.
 
+## Level (intensity)
+**Level** sets how much of the cleaned signal you hear: 100% is fully processed,
+0% is the untouched input, and the values in between are a straight blend of the
+two.
+
+It is a **stepped** control with 21 positions — 0, 5, 10 … 100% — so the slider
+snaps and the read-out is always a whole multiple of 5. The mouse wheel moves one
+step at a time.
+
+The NVIDIA SDK only reads this value while it builds the effect — setting it on a
+running effect is accepted but changes nothing. So the plugin rebuilds the effect
+when you change Level, which takes about 85 ms. To keep that off every mouse-move,
+it waits until the value has held still for **0.2 seconds**: drag freely, and the
+new setting lands shortly after you let go, with one brief interruption.
+
+Level only does anything for **Noise / Reverb / Both with Super Resolution off**:
+
+- **Echo Cancel** has no intensity control at all.
+- With **Super Resolution** on, the SDK ignores the value outright (verified on
+  1.6.1.2: three effects built at 100% / 50% / 0% produce byte-identical audio,
+  and the parameter cannot even be read back).
+
+In those two cases the slider still moves, but the sound does not change, and the
+plugin skips the pointless rebuild.
+
 > Studio Voice and Speaker Focus were removed. They require the NVIDIA AFX **2.x**
 > models, which are not available for Windows (the 1.6.1.2 redistributable ships
 > no such models), so on this machine they never worked.
@@ -110,5 +135,6 @@ user folder `%LOCALAPPDATA%\Programs\Common\VST3\` or the system
 - **Echo Cancel (AEC)** expects the reference signal on the right input channel
   (left = mic); see **Echo Cancel (AEC)** above. With a mono input there is no
   reference channel, so AEC produces silence.
-- The **Level** slider and **Super Res** apply to the Noise / Reverb / Both modes;
-  AEC has no intensity control and ignores both.
+- **Super Res** applies to the Noise / Reverb / Both modes; AEC ignores it.
+- The **Level** slider needs Super Resolution off, and applies ~0.2 s after you
+  stop moving it; see **Level (intensity)** above.

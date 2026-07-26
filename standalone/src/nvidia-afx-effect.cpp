@@ -43,7 +43,10 @@ nvidia::afx::effect::effect() : _lock(), _model_path(), _model_path_str()
 #endif
 
 #ifndef TONPLUGINS_DEMO
-	intensity(0.67);
+	// Must match the Intensity parameter's default in the controller (100%),
+	// otherwise the editor shows one value while the effect runs at another until
+	// the slider is touched.
+	intensity(1.0);
 	voice_activity_detection(false);
 #endif
 
@@ -230,7 +233,6 @@ void nvidia::afx::effect::enable_denoise(bool v)
 	if (v != _fx_denoise) {
 		_fx_denoise = v;
 		_fx_dirty   = true;
-		_fx_model   = true;
 	}
 }
 
@@ -247,7 +249,6 @@ void nvidia::afx::effect::enable_dereverb(bool v)
 	if (v != _fx_dereverb) {
 		_fx_dereverb = v;
 		_fx_dirty    = true;
-		_fx_model    = true;
 	}
 }
 
@@ -264,7 +265,6 @@ void nvidia::afx::effect::enable_superres(bool v)
 	if (v != _fx_superres) {
 		_fx_superres = v;
 		_fx_dirty    = true;
-		_fx_model    = true;
 	}
 }
 
@@ -281,7 +281,6 @@ void nvidia::afx::effect::enable_aec(bool v)
 	if (v != _fx_aec) {
 		_fx_aec   = v;
 		_fx_dirty = true;
-		_fx_model = true;
 	}
 }
 
@@ -296,8 +295,8 @@ void nvidia::afx::effect::intensity(float v)
 
 	auto lock = std::unique_lock<decltype(_lock)>(_lock);
 	if (v != _cfg_intensity) {
-		_cfg_intensity = v;
-		_cfg_dirty     = true;
+		_cfg_intensity  = v;
+		_cfg_changed_at = std::chrono::steady_clock::now().time_since_epoch().count();
 	}
 }
 
@@ -312,11 +311,57 @@ void nvidia::afx::effect::voice_activity_detection(bool v)
 
 	auto lock = std::unique_lock<decltype(_lock)>(_lock);
 	if (v != _cfg_vad) {
-		_cfg_vad   = v;
-		_cfg_dirty = true;
+		_cfg_vad        = v;
+		_cfg_changed_at = std::chrono::steady_clock::now().time_since_epoch().count();
 	}
 }
 
+#endif
+
+#ifndef TONPLUGINS_DEMO
+// How long the Level value has to hold still before the effect is rebuilt.
+// A rebuild costs roughly 85ms on the audio thread, so it must not run on every
+// mouse-move event while the slider is being dragged -- only once the user lets go.
+static constexpr std::chrono::milliseconds intensity_settle_time{200};
+
+bool nvidia::afx::effect::config_applies() const
+{
+	// Only the plain 48kHz effects have an intensity ratio (and VAD).
+	//
+	// Echo Cancel exposes neither; setting them would fail. The chained Super
+	// Resolution effects accept NvAFX_SetFloat but ignore the value outright --
+	// measured on SDK 1.6.1.2, three handles loaded at 1.0 / 0.5 / 0.0 produce
+	// byte-identical audio, and NvAFX_GetFloat cannot even read the parameter
+	// back. In both cases Level does nothing, so it must not trigger a rebuild.
+	return !_fx_aec && !_fx_superres;
+}
+
+void nvidia::afx::effect::apply_config()
+{
+	if (config_applies()) {
+		set<float>(NVAFX_PARAM_INTENSITY_RATIO, _cfg_intensity);
+		set<bool>(NVAFX_PARAM_ENABLE_VAD, _cfg_vad);
+	}
+
+	// Recorded as applied either way, so a Level change in a mode that ignores it
+	// doesn't leave the effect looking permanently out of date.
+	_fx_intensity = _cfg_intensity.load();
+	_fx_vad       = _cfg_vad.load();
+}
+
+bool nvidia::afx::effect::config_reload_due() const
+{
+	if (!config_applies()) {
+		return false;
+	}
+
+	if ((_cfg_intensity.load() == _fx_intensity.load()) && (_cfg_vad.load() == _fx_vad.load())) {
+		return false;
+	}
+
+	std::chrono::steady_clock::time_point changed_at{std::chrono::steady_clock::duration{_cfg_changed_at.load()}};
+	return (std::chrono::steady_clock::now() - changed_at) >= intensity_settle_time;
+}
 #endif
 
 void nvidia::afx::effect::load()
@@ -325,6 +370,23 @@ void nvidia::afx::effect::load()
 	char message_buffer[1024] = {0};
 
 	auto lock = std::unique_lock<decltype(_lock)>(_lock);
+
+#ifndef TONPLUGINS_DEMO
+	// NvAFX_Load bakes the intensity ratio and VAD flag into the effect. Setting
+	// them on a loaded effect is accepted (NvAFX_SetFloat returns SUCCESS and
+	// NvAFX_GetFloat even reports the new value) but the audio keeps using the
+	// value from load time -- which is why the Level slider used to do nothing.
+	//
+	// Measured on SDK 1.6.1.2: a second NvAFX_Load fails with MODEL_LOAD_FAILED,
+	// and NvAFX_Reset does not re-read the parameters either -- it leaves the
+	// effect no longer denoising at all. So the only way to change them is to
+	// build the effect from scratch, which config_reload_due() defers until the
+	// user has stopped moving the slider.
+	if (config_reload_due()) {
+		_fx_dirty = true;
+	}
+#endif
+
 	if (_fx_dirty) {
 		D_LOG("Effect is dirty and must be reloaded.");
 
@@ -387,13 +449,10 @@ void nvidia::afx::effect::load()
 			_model_path_str = _model_path_strs.front();
 		}
 
-		if (_fx_model) {
-			// Unload all previous effects.
-			_fx.clear();
-		} else {
-			// Clear all current effects to reset their state.
-			clear();
-		}
+		// Unload all previous effects. A handle can only be loaded once -- a second
+		// NvAFX_Load returns MODEL_LOAD_FAILED and the parameters set before the
+		// first one stay in force -- so a rebuild always starts from fresh handles.
+		_fx.clear();
 
 		// One effect handle per channel for the classic per-channel effects, but a
 		// SINGLE handle for AEC (it consumes mic + reference together and emits one
@@ -461,6 +520,13 @@ void nvidia::afx::effect::load()
 		}
 		D_LOG("Sample rate is now %" PRIu32 " Hz in / %" PRIu32 " Hz out.", in_rate, out_rate);
 
+#ifndef TONPLUGINS_DEMO
+		// Intensity and VAD have to be in place BEFORE NvAFX_Load; that call is what
+		// bakes them into the effect.
+		apply_config();
+		D_LOG("Building the effect with intensity %f.", _cfg_intensity.load());
+#endif
+
 		// Initialize the effect
 		for (size_t channel = 0; channel < _fx.size(); channel++) {
 			auto& fx = _fx[channel];
@@ -469,63 +535,15 @@ void nvidia::afx::effect::load()
 			}
 		}
 
-#ifndef TONPLUGINS_DEMO
-		// Mark configuration as dirty to force an update to all effects.
-		_cfg_dirty = true;
-#endif
 		_fx_dirty = false;
 	}
-
-#ifndef TONPLUGINS_DEMO
-	if (_cfg_dirty) {
-		std::shared_ptr<::nvidia::cuda::context_stack> cstk;
-		if (auto ctx = _nvafx->cuda_context(); ctx) {
-			cstk = ctx->enter();
-		}
-
-		// AEC exposes neither an intensity ratio nor VAD; setting them would fail.
-		if (!_fx_aec) {
-			set<float>(NVAFX_PARAM_INTENSITY_RATIO, _cfg_intensity);
-			set<bool>(NVAFX_PARAM_ENABLE_VAD, _cfg_vad);
-		}
-		_cfg_dirty = false;
-	}
-#endif
 }
 
-void nvidia::afx::effect::clear()
-{
-	D_LOG_LOUD("Clearing effect state.");
-
-	// Prevent outside modifications while we're working.
-	auto lock = std::unique_lock<decltype(_lock)>(_lock);
-
-	// Prefer the SDK's official reset: it clears each effect's internal state
-	// directly, instead of flooding it with silence to "warm" it back to zero.
-	if (_nvafx->Reset) {
-		bool all_reset = true;
-		for (size_t ch = 0; ch < _fx.size(); ch++) {
-			if (!_fx[ch]) {
-				continue;
-			}
-			if (auto res = _nvafx->Reset(_fx[ch].get()); res != NVAFX_STATUS_SUCCESS) {
-				D_LOG("NvAFX_Reset failed on channel %zu: 0x%08" PRIX32 "; falling back to buffer flush.", ch, res);
-				all_reset = false;
-				break;
-			}
-		}
-		if (all_reset) {
-			return;
-		}
-	}
-
-	// Fallback for older runtimes: soft-clear by flooding the internal buffer.
-	std::vector<float>  data(input_blocksize() * 10, 0.f);
-	std::vector<float>  odata(input_blocksize() * 10, 0.f);
-	std::vector<float*> channel_data(_fx_channels, data.data());
-	std::vector<float*> channel_odata(_fx_channels, odata.data());
-	process(const_cast<const float**>(channel_data.data()), channel_odata.data(), data.size());
-}
+// There used to be a clear() here that soft-reset the effect through NvAFX_Reset.
+// It is gone: on SDK 1.6.1.2 NvAFX_Reset reports success but leaves the effect no
+// longer denoising (measured: output energy jumps from 0.10 to 800 on a signal it
+// had been cleaning), so it is worse than useless. Anything that needs a clean
+// effect has to rebuild it -- see load().
 
 void nvidia::afx::effect::process(const float** input, float** output, size_t samples)
 {
@@ -547,8 +565,9 @@ void nvidia::afx::effect::process(float const** inputs, size_t& input_samples, f
 		// Prevent outside modifications while we're working.
 		auto lock = std::unique_lock<decltype(_lock)>(_lock);
 
-		// Reload the effect
-		if (_fx_dirty || _cfg_dirty) {
+		// Reload the effect. config_reload_due() covers a settled Level change,
+		// which can only be applied by rebuilding.
+		if (_fx_dirty || config_reload_due()) {
 			load();
 		}
 

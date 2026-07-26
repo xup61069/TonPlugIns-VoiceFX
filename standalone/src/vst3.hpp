@@ -30,3 +30,9 @@
 #define PARAMETER_MODE FOURCC('M', 'o', 'd', 'e')
 #define PARAMETER_INTENSITY FOURCC('I', 'n', 't', 's')
 #define PARAMETER_SUPERRES FOURCC('S', 'u', 'p', 'R')
+
+// Intensity is a stepped parameter: 21 positions at 0, 5, 10 ... 100 %, which is
+// a VST3 stepCount of 20. Both sides need it -- the controller to declare and
+// snap the parameter, the processor because automation reaches it directly,
+// without passing through the controller's parameter object.
+#define PARAMETER_INTENSITY_STEPS 20

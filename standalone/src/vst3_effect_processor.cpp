@@ -25,7 +25,9 @@
 #include "vst3_effect_controller.hpp"
 
 #include "warning-disable.hpp"
+#include <algorithm>
 #include <base/source/fstreamer.h>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <pluginterfaces/vst/ivstparameterchanges.h>
@@ -308,7 +310,16 @@ tresult PLUGIN_API vst3::effect::processor::process(ProcessData& data)
 							break;
 						case PARAMETER_INTENSITY:
 							if (param->getPoint(points - 1, sample_offset, value) == kResultTrue) {
-								_fx->intensity(value);
+								// Snap to one of the 21 steps. The editor already sends
+								// stepped values (see stepped_percent_parameter in
+								// vst3_effect_controller.cpp), but automation arrives here
+								// straight from the host, which may interpolate between
+								// points. Snapping here keeps the audio stepped either way,
+								// and keeps repeats of the same step from looking like a
+								// change worth rebuilding the effect for.
+								constexpr double steps = static_cast<double>(PARAMETER_INTENSITY_STEPS);
+								value                  = std::clamp(value, 0.0, 1.0);
+								_fx->intensity(static_cast<float>(std::round(value * steps) / steps));
 							}
 							break;
 						}

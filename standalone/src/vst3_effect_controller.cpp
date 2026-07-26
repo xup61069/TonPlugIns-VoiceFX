@@ -25,11 +25,104 @@
 
 #include <warning-disable.hpp>
 #include <base/source/fstreamer.h>
+#include <pluginterfaces/base/ustring.h>
 #include <pluginterfaces/vst/ivsteditcontroller.h>
 #include <vstgui/plugin-bindings/vst3editor.h>
 #include <warning-enable.hpp>
 
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+
+namespace {
+	// Level is a stepped percentage: 21 positions at 0, 5, 10 ... 100 %
+	// (stepCount = 20). Plain RangeParameter cannot express that, because of two
+	// details in public.sdk/source/vst/vstparameters.cpp:
+	//
+	//  * As soon as stepCount > 1, toPlain()/toNormalized() switch to "min + step
+	//    index" and ignore max completely, so a 0..100 range would read out as
+	//    0..20 -- and RangeParameter's constructor uses toNormalized() on the
+	//    default value, which turns a default of 100 % into a normalized 5.0.
+	//  * setNormalized() only clamps to 0..1; nothing snaps to a step, and
+	//    RangeParameter does not override it. The slider would look like it snaps
+	//    while the processor, host automation and the saved state still received
+	//    continuous values -- the sound would not be stepped at all.
+	//
+	// This subclass keeps min/max meaningful as a percentage and does the snapping
+	// itself.
+	class stepped_percent_parameter : public Steinberg::Vst::RangeParameter {
+		public:
+		stepped_percent_parameter(const Steinberg::Vst::TChar* title, Steinberg::Vst::ParamID tag, const Steinberg::Vst::TChar* units, Steinberg::Vst::ParamValue min_plain, Steinberg::Vst::ParamValue max_plain, Steinberg::Vst::ParamValue default_plain, Steinberg::int32 step_count, Steinberg::int32 flags) : RangeParameter(title, tag, units, min_plain, max_plain, default_plain, step_count, flags)
+		{
+			// The base constructor normalized the default with its own (stepped)
+			// toNormalized(), so redo it with ours.
+			info.defaultNormalizedValue = valueNormalized = toNormalized(default_plain);
+		}
+
+		// Snapping here is what makes the steps real: everything downstream (the
+		// processor, automation, saved state) gets one of the 21 values. VST3Editor
+		// calls performEdit(getParamNormalized(id)) right after setParamNormalized(),
+		// so this is also what makes the on-screen slider jump between positions.
+		bool setNormalized(Steinberg::Vst::ParamValue value) override
+		{
+			return RangeParameter::setNormalized(quantize(value));
+		}
+
+		Steinberg::Vst::ParamValue toPlain(Steinberg::Vst::ParamValue value) const override
+		{
+			return getMin() + quantize(value) * (getMax() - getMin());
+		}
+
+		Steinberg::Vst::ParamValue toNormalized(Steinberg::Vst::ParamValue plain) const override
+		{
+			if (getMax() <= getMin()) {
+				return 0.;
+			}
+			return quantize((plain - getMin()) / (getMax() - getMin()));
+		}
+
+		void toString(Steinberg::Vst::ParamValue value, Steinberg::Vst::String128 string) const override
+		{
+			char text[32] = {};
+			snprintf(text, sizeof(text), "%d %%", static_cast<int>(std::lround(toPlain(value))));
+			Steinberg::UString(string, static_cast<Steinberg::int32>(str16BufferSize(Steinberg::Vst::String128))).fromAscii(text);
+		}
+
+		// For hosts that let the user type a value. Accepts both a bare number and
+		// the "55 %" form we print ourselves; the result is snapped like any other.
+		bool fromString(const Steinberg::Vst::TChar* string, Steinberg::Vst::ParamValue& value) const override
+		{
+			if (string == nullptr) {
+				return false;
+			}
+
+			char text[64] = {};
+			Steinberg::UString(const_cast<Steinberg::Vst::TChar*>(string), Steinberg::tstrlen(string)).toAscii(text, static_cast<Steinberg::int32>(sizeof(text)));
+
+			char*  end   = nullptr;
+			double plain = std::strtod(text, &end);
+			if (end == text) {
+				return false;
+			}
+
+			value = toNormalized(std::clamp(plain, getMin(), getMax()));
+			return true;
+		}
+
+		private:
+		Steinberg::Vst::ParamValue quantize(Steinberg::Vst::ParamValue value) const
+		{
+			value = std::clamp(value, 0., 1.);
+			if (info.stepCount < 1) {
+				return value;
+			}
+			double steps = static_cast<double>(info.stepCount);
+			return std::round(value * steps) / steps;
+		}
+	};
+} // namespace
 
 vst3::effect::controller::controller()
 {
@@ -51,8 +144,9 @@ vst3::effect::controller::controller()
 		parameters.addParameter(p);
 	}
 	{
-		auto p = new Steinberg::Vst::RangeParameter(STR("Intensity"), PARAMETER_INTENSITY, STR("%"), 0.0, 100.0, 100.0, 0, Steinberg::Vst::ParameterInfo::ParameterFlags::kCanAutomate);
-		//p->setPrecision(2);
+		// 21 steps of 5 %: 0, 5, 10 ... 100. See stepped_percent_parameter above for
+		// why this is not a plain RangeParameter.
+		auto p = new stepped_percent_parameter(STR("Intensity"), PARAMETER_INTENSITY, STR("%"), 0.0, 100.0, 100.0, PARAMETER_INTENSITY_STEPS, Steinberg::Vst::ParameterInfo::ParameterFlags::kCanAutomate);
 		parameters.addParameter(p);
 	}
 	{
